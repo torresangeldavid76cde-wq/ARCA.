@@ -12,6 +12,17 @@ Desde la terminal también puedes ejecutar `npm run dev`: inicia la base de dato
 
 El iniciador utiliza Node.js y MariaDB de `C:\xampp\mysql`. Levanta una instancia independiente en el puerto **3306**, con datos en `runtime/mysql-data`. La API usa el puerto **4180**. Para detener, pulsa Ctrl+C en la ventana del iniciador.
 
+## Desplegar en Vercel
+
+El proyecto separa la interfaz estática de Vite y la API Express, que se ejecuta como una función de Vercel. La base local de XAMPP no se publica ni es accesible desde Vercel; necesitas una instancia MySQL alojada que permita conexiones desde Vercel y use TLS.
+
+1. Confirma que el esquema `arc` y sus migraciones están aplicados en el MySQL alojado. No ejecutes `npm run db:init` contra producción: crea cuentas de demostración.
+2. Importa el repositorio en Vercel. La configuración de este proyecto compila con `npm run build` y publica `dist`.
+3. En **Settings → Environment Variables** de Vercel, configura `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` y `DB_PASSWORD` para Production. Añade `DB_SSL=true`, `DB_CONNECTION_LIMIT=2` y `TRUST_PROXY_HOPS=1`. Usa una cuenta MySQL exclusiva para la aplicación, con permisos mínimos; no copies credenciales al repositorio ni al chat.
+4. Despliega y comprueba `https://TU-DOMINIO/api/health`. Debe responder con `{"ok":true,"database":"conectada"}`.
+
+El repositorio excluye `.env`, `CUENTAS-DEMO.txt` y `runtime/`; no subas copias de la base ni archivos con cuentas. La aplicación maneja datos personales, incluidos EPS y datos de emergencia: revisa los requisitos de privacidad y los controles de acceso del proveedor antes de cargar información real. Vercel aloja la aplicación, no la base de datos.
+
 La conexión ya está configurada en `.env` con `DB_NAME=arc`, que contiene credenciales locales privadas. No lo publiques. `runtime/database-admin.txt` contiene la clave administrativa de esta instancia aislada. La cuenta de la API tiene permisos limitados a `arc`.
 
 La base anterior `arca_nueva` se conserva como respaldo de la migración a `arc`; la aplicación ya no la usa y los cambios nuevos solo se guardan en `arc`. No borres ese respaldo hasta verificar la nueva base. El nombre visible de la aplicación sigue siendo ARCA.

@@ -14,7 +14,7 @@ import {tracking} from './tracking.js';
 import {roles,attendanceRoles,managers,personal,pastoral,academic,canGrant} from './access.js';
 const app=express(),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 // Set this only for the known number of reverse proxies in the hosting path.
-const proxyHops=process.env.TRUST_PROXY_HOPS||'0';
+const proxyHops=process.env.TRUST_PROXY_HOPS||(process.env.VERCEL==='1'?'1':'0');
 if(!/^\d+$/.test(proxyHops)||Number(proxyHops)>10)throw new Error('TRUST_PROXY_HOPS debe ser un entero entre 0 y 10');
 app.set('trust proxy',Number(proxyHops));
 app.use(helmet({contentSecurityPolicy:{directives:{'img-src':["'self'",'data:'],'script-src':["'self'"],'media-src':["'self'"]}}}));
@@ -185,9 +185,9 @@ tracking(app,wrap,allow,fail);
 app.get('/api/stats',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);const [counts]=await query("SELECT (SELECT COUNT(*) FROM members WHERE status='activo') members,(SELECT COUNT(*) FROM groups_family) groups,(SELECT COUNT(*) FROM courses) courses,(SELECT COUNT(*) FROM events WHERE status='programado') events");let alerts=[];if(pastoral.includes(req.user.role))alerts=await query("SELECT m.id,m.name FROM members m JOIN attendance a ON a.member_id=m.id JOIN events e ON e.id=a.event_id WHERE m.status='activo' AND e.status<>'cancelado' AND e.event_date<=NOW() AND a.status='ausente' AND (SELECT COUNT(*) FROM attendance a2 JOIN events e2 ON e2.id=a2.event_id WHERE a2.member_id=m.id AND e2.status<>'cancelado' AND e2.event_date<=NOW() AND (e2.event_date>e.event_date OR (e2.event_date=e.event_date AND e2.id>e.id)))<2 GROUP BY m.id,m.name HAVING COUNT(*)=2");res.json({...counts,alerts})}));
 app.get('/api/reports/:type/:format',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);const type=z.enum(['asistencia','cumpleanos','grupos']).parse(req.params.type),format=z.enum(['xlsx','pdf']).parse(req.params.format);if(type==='cumpleanos')allow(req.user,pastoral);let rows;if(type==='asistencia'){const filters=z.object({date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),course_id:z.coerce.number().int().positive().optional()}).parse(req.query);const clauses=["e.status<>'cancelado'",'e.event_date<=NOW()'];const params=[];if(filters.date){clauses.push('DATE(e.event_date)=?');params.push(filters.date)}if(filters.course_id){clauses.push('c.id=?');params.push(filters.course_id)}rows=await query(`SELECT DATE_FORMAT(e.event_date,'%Y-%m-%d %H:%i') Fecha,c.title Clase,e.title Sesion,m.name Usuario,COALESCE(a.status,'sin_registro') Estado FROM events e JOIN courses c ON c.id=e.course_id JOIN course_members cm ON cm.course_id=c.id JOIN members m ON m.id=cm.member_id AND m.status='activo' LEFT JOIN attendance a ON a.event_id=e.id AND a.member_id=m.id WHERE ${clauses.join(' AND ')} ORDER BY e.event_date DESC,c.title,m.name`,params)}else rows=await query(type==='cumpleanos'?'SELECT name Nombre,birthday Cumpleanos FROM members WHERE status=\'activo\' ORDER BY MONTH(birthday),DAY(birthday)':'SELECT g.name Grupo,COUNT(m.id) Integrantes FROM groups_family g LEFT JOIN members m ON m.group_id=g.id GROUP BY g.id,g.name');res.attachment(`arca-${type}.${format}`);if(format==='xlsx'){const w=new ExcelJS.Workbook(),s=w.addWorksheet(type);if(rows.length){s.columns=Object.keys(rows[0]).map(k=>({header:k,key:k,width:28}));s.addRows(rows);}else s.addRow(['Sin registros']);await w.xlsx.write(res);res.end()}else{const doc=new PDFDocument({margin:45});res.type('pdf');doc.pipe(res);doc.fontSize(20).text('ARCA · '+type);doc.moveDown();doc.fontSize(10);for(const row of rows){doc.text(Object.entries(row).map(([k,v])=>`${k}: ${v??''}`).join(' | '));doc.moveDown()}if(!rows.length)doc.text('Sin registros');doc.end()}}));
 app.use('/api',(req,res)=>res.status(404).json({error:'Ruta inexistente'}));
-app.use(express.static(path.join(root,'dist')));
-app.get('*',(req,res)=>res.sendFile(path.join(root,'dist/index.html')));
+if(process.env.VERCEL!=='1'){
+ app.use(express.static(path.join(root,'dist')));
+ app.get('*',(req,res)=>res.sendFile(path.join(root,'dist/index.html')));
+}
 app.use((err,req,res,next)=>{if(res.headersSent)return next(err);const status=err instanceof z.ZodError?400:err.code==='ER_DUP_ENTRY'?409:err.status||500;res.status(status).json({error:status===400?'Revisa los campos del formulario':status===409?'El registro ya existe':status===500?'No se pudo completar la operación':err.message})});
-const host=process.env.HOST||(process.env.NODE_ENV==='production'?'0.0.0.0':'127.0.0.1');
-const server=app.listen(Number(process.env.PORT||4180),host,()=>console.log(`ARCA escuchando en ${host}:${server.address().port}`));
-export {app,server};
+export {app};

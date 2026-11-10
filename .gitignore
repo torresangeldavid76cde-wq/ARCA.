@@ -5,4 +5,5 @@ dist/
 !.env.example
 CUENTAS-DEMO.txt
 runtime/
+.vercel/
 *.log
