@@ -49,6 +49,24 @@ cambiarse también allí. No se ha reescrito el historial remoto.
 
 ## Comprobación local de estos cambios
 
+### Actualización de asistencia por QR
+
+Antes de desplegar esta versión en una base existente, aplica con una cuenta
+administrativa la columna de confirmación (solo si aún no existe):
+
+```sql
+ALTER TABLE events ADD COLUMN checkin_token_hash CHAR(64) NULL;
+```
+
+La inicialización local aplica este cambio automáticamente y de forma idempotente.
+No ejecutes `db:init` contra producción. Despliega tanto la API como la interfaz
+y genera los QR desde el dominio HTTPS público, no desde `127.0.0.1`.
+Un QR no confirma la asistencia por sí solo: abre el acceso de ARCA y el discípulo
+debe iniciar sesión y pulsar **Confirmar que asistí**. Su cuenta debe ser de
+estudiante, tener un perfil activo vinculado y ambas inscripciones del curso
+(cuenta y perfil). El QR sigue vigente hasta generar otro o cancelar la sesión;
+no verifica presencia física ni impone una ventana horaria.
+
 Con las dependencias ya instaladas:
 
 ```text

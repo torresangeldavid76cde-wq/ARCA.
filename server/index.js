@@ -56,7 +56,6 @@ app.post('/api/sunday-services',wrap(async(req,res)=>{
 }));
 app.get('/api/members/:id/history',wrap(async(req,res,next)=>{adminOnly(req.user);next()}));
 app.get('/api/reports/asistencia/:format',wrap(async(req,res,next)=>{allow(req.user,[...pastoral,'multimedia']);next()}));
-app.get('/api/events',wrap(async(req,res,next)=>{if(req.user.role==='estudiante')return next();res.json(await query('SELECT * FROM events ORDER BY event_date DESC'))}));
 app.get('/api/courses',wrap(async(req,res,next)=>{
  if(!['docente','discipulador'].includes(req.user.role))return next();
  res.json(await query(`SELECT c.*,u.name teacher,(SELECT COUNT(*) FROM course_members e WHERE e.course_id=c.id) enrolled FROM courses c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.teacher_id=? OR EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id=c.id AND e.user_id=?) ORDER BY c.id`,[req.user.id,req.user.id]));
@@ -108,26 +107,6 @@ app.put('/api/users/:id/courses',wrap(async(req,res)=>{
  }
  res.json({ok:true});
 }));
-app.get('/api/attendance/:event',wrap(async(req,res,next)=>{
- if(!attendanceRoles.includes(req.user.role))return next();
- const [e]=await query('SELECT id FROM events WHERE id=?',[req.params.event]);
- if(!e)fail(404,'Evento inexistente');
- res.json(await query('SELECT m.id,m.name,m.identification,a.status FROM members m LEFT JOIN attendance a ON a.member_id=m.id AND a.event_id=? WHERE m.status=\'activo\' ORDER BY m.name',[e.id]));
-}));
-app.post('/api/attendance/:event',wrap(async(req,res,next)=>{
- if(!attendanceRoles.includes(req.user.role))return next();
- const [e]=await query('SELECT * FROM events WHERE id=?',[req.params.event]);
- if(!e)fail(404,'Evento inexistente');
- if(e.status==='cancelado')fail(400,'Evento cancelado');
- const d=z.object({member_id:z.number().int().positive(),status:z.enum(['presente','ausente','justificado','visitante'])}).parse(req.body);
- const [m]=await query('SELECT id FROM members WHERE id=? AND status=\'activo\'',[d.member_id]);
- if(!m)fail(403,'Miembro fuera del alcance de la lista');
- const [old]=await query('SELECT status FROM attendance WHERE event_id=? AND member_id=?',[e.id,d.member_id]);
- if(old)allow(req.user,pastoral);
- if(old)await query('UPDATE attendance SET status=?,recorded_by=? WHERE event_id=? AND member_id=?',[d.status,req.user.id,e.id,d.member_id]);
- else await query('INSERT INTO attendance VALUES(?,?,?,?,NOW())',[e.id,d.member_id,d.status,req.user.id]);
- res.json({ok:true});
-}));
 app.get('/api/admin/attendance-history',wrap(async(req,res)=>{adminOnly(req.user);res.json(await query("SELECT m.name,e.title event,c.title course,DATE_FORMAT(e.event_date,'%Y-%m-%d %H:%i') event_date,a.status FROM attendance a JOIN members m ON m.id=a.member_id JOIN events e ON e.id=a.event_id LEFT JOIN courses c ON c.id=e.course_id ORDER BY e.event_date DESC,m.name"))}));
 app.get('/api/report-options',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);res.json(await query('SELECT id,title,area FROM courses ORDER BY area,title'))}));
 app.get('/api/admin/solicitudes',wrap(async(req,res)=>{adminOnly(req.user);const estado=z.enum(['pendiente','activa','rechazada']).optional().parse(req.query.estado);const term=String(req.query.q||'').slice(0,160);res.json(await query(`SELECT s.id,s.estado,s.metodo_registro,s.fecha_solicitud,s.motivo_rechazo,u.id user_id,u.name,u.email FROM solicitudes_acceso s JOIN users u ON u.id=s.user_id WHERE (? IS NULL OR s.estado=?) AND (?='' OR u.name LIKE CONCAT('%',?,'%') OR u.email LIKE CONCAT('%',?,'%')) ORDER BY s.fecha_solicitud DESC`,[estado||null,estado||null,term,term,term]))}));
@@ -174,11 +153,77 @@ app.post('/api/courses',wrap(async(req,res)=>{allow(req.user,academic);const d=z
 app.get('/api/courses/:id/lessons',wrap(async(req,res)=>{await courseAccess(req.user,req.params.id);res.json(await query('SELECT * FROM lessons WHERE course_id=?',[req.params.id]))}));
 app.post('/api/courses/:id/lessons',wrap(async(req,res)=>{await courseAccess(req.user,req.params.id,true);const d=z.object({title:text,body:z.string().max(20000),url}).parse(req.body);await query('INSERT INTO lessons(course_id,title,body,url) VALUES(?,?,?,?)',[req.params.id,d.title,d.body,d.url]);res.status(201).json({ok:true})}));
 app.post('/api/courses/:id/enroll',wrap(async(req,res)=>{allow(req.user,managers);await courseAccess(req.user,req.params.id,true);const {email}=z.object({email:z.string().email()}).parse(req.body);const [u]=await query('SELECT id FROM users WHERE email=? AND active=TRUE',[email]);if(!u)fail(404,'Primero habilita el correo en Accesos');await query('INSERT IGNORE INTO enrollments VALUES(?,?)',[req.params.id,u.id]);res.json({ok:true})}));
-app.get('/api/events',wrap(async(req,res)=>res.json(await query(`SELECT * FROM events ${groupScope(req.user)?'WHERE group_id IS NULL OR group_id IN(SELECT id FROM groups_family WHERE leader_id=?)':''} ORDER BY event_date DESC`,groupScope(req.user)?[req.user.id]:[]))));
+app.get('/api/attendance/:event',wrap(async(req,res,next)=>{
+ if(!attendanceRoles.includes(req.user.role))return next();
+ const [e]=await query('SELECT id FROM events WHERE id=?',[req.params.event]);
+ if(!e)fail(404,'Evento inexistente');
+ res.json(await query("SELECT m.id,m.name,m.identification,a.status FROM members m LEFT JOIN attendance a ON a.member_id=m.id AND a.event_id=? WHERE m.status='activo' ORDER BY m.name",[e.id]));
+}));
+app.post('/api/attendance/:event',wrap(async(req,res,next)=>{
+ if(!attendanceRoles.includes(req.user.role))return next();
+ const [e]=await query('SELECT * FROM events WHERE id=?',[req.params.event]);
+ if(!e)fail(404,'Evento inexistente');
+ if(e.status==='cancelado')fail(400,'Evento cancelado');
+ const d=z.object({member_id:z.number().int().positive(),status:z.enum(['presente','ausente','justificado','visitante'])}).parse(req.body);
+ const [m]=await query("SELECT id FROM members WHERE id=? AND status='activo'",[d.member_id]);
+ if(!m)fail(403,'Miembro fuera del alcance de la lista');
+ const [old]=await query('SELECT status FROM attendance WHERE event_id=? AND member_id=?',[e.id,d.member_id]);
+ if(old)allow(req.user,pastoral);
+ if(old)await query('UPDATE attendance SET status=?,recorded_by=? WHERE event_id=? AND member_id=?',[d.status,req.user.id,e.id,d.member_id]);
+ else await query('INSERT INTO attendance VALUES(?,?,?,?,NOW())',[e.id,d.member_id,d.status,req.user.id]);
+ res.json({ok:true});
+}));
+app.get('/api/events',wrap(async(req,res)=>{
+ const events=await query('SELECT * FROM events ORDER BY event_date DESC');
+ res.json(events.map(({checkin_token_hash,...event})=>event));
+}));
 const eventSchema=z.object({title:text,kind:z.enum(['servicio','especial','grupo','adiestramiento','discipulado']),event_date:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).refine(s=>!isNaN(Date.parse(s))),location:optional,image_url:url,description:optional,registration:z.boolean().default(false),group_id:z.coerce.number().int().positive().nullable().default(null),course_id:z.coerce.number().int().positive().nullable().default(null)});
-app.post('/api/events',wrap(async(req,res)=>{allow(req.user,[...academic,'discipulador','multimedia']);const d=eventSchema.parse(req.body);if(d.course_id){const c=await courseAccess(req.user,d.course_id,true);d.group_id=c.group_id;d.kind=c.area;}else if(['docente','discipulador'].includes(req.user.role))fail(403,'Selecciona un curso a tu cargo');await query('INSERT INTO events(title,kind,event_date,location,image_url,description,registration,group_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)',Object.values(d));res.status(201).json({ok:true})}));
+app.post('/api/events',wrap(async(req,res)=>{allow(req.user,[...academic,'discipulador','multimedia']);const d=eventSchema.parse(req.body);if(d.course_id){const c=await courseAccess(req.user,d.course_id,true);d.group_id=c.group_id;d.kind=c.area;}else if(['docente','discipulador'].includes(req.user.role))fail(403,'Selecciona un curso a tu cargo');const created=await query('INSERT INTO events(title,kind,event_date,location,image_url,description,registration,group_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)',Object.values(d));res.status(201).json({ok:true,id:created.insertId})}));
 app.patch('/api/events/:id',wrap(async(req,res)=>{allow(req.user,['administrador','pastor','multimedia']);const d=z.object({status:z.enum(['programado','cancelado']),event_date:eventSchema.shape.event_date,title:text.optional(),location:z.string().trim().max(500).optional(),description:z.string().trim().max(500).optional(),image_url:url.optional(),registration:z.boolean().optional()}).parse(req.body);const [event]=await query('SELECT id FROM events WHERE id=?',[req.params.id]);if(!event)fail(404,'Evento inexistente');const fields=Object.entries(d);await query(`UPDATE events SET ${fields.map(([name])=>name+'=?').join(',')} WHERE id=?`,[...fields.map(([,value])=>value),event.id]);res.json({ok:true})}));
 async function eventAccess(u,id){const [e]=await query('SELECT * FROM events WHERE id=?',[id]);if(!e)fail(404,'Evento inexistente');if(e.course_id)await courseAccess(u,e.course_id,true);if(groupScope(u)&&e.group_id){const [g]=await query('SELECT id FROM groups_family WHERE id=? AND leader_id=?',[e.group_id,u.id]);if(!g)fail(403,'Grupo fuera de tu asignación')}return e}
+app.post('/api/attendance/:event/qr',wrap(async(req,res)=>{
+ allow(req.user,attendanceRoles);
+ const e=await eventAccess(req.user,req.params.event);
+ if(!e.course_id)fail(400,'El QR de confirmación solo está disponible para sesiones de cursos');
+ if(e.status==='cancelado')fail(400,'No se puede generar un QR para una sesión cancelada');
+ const token=randomBytes(32).toString('base64url');
+ await query('UPDATE events SET checkin_token_hash=? WHERE id=?',[hash(token),e.id]);
+ const [course]=await query('SELECT title FROM courses WHERE id=?',[e.course_id]);
+ res.json({path:`/?checkin=${e.id}.${token}`,event:{title:e.title,course:course.title,event_date:e.event_date}});
+}));
+async function checkinAccess(user,eventId,token,connection){
+ allow(user,['estudiante']);
+ if(!/^\d+$/.test(eventId)||!/^[A-Za-z0-9_-]{43}$/.test(token))fail(400,'El QR de asistencia no es válido');
+ const execute=connection?async(sql,args)=>(await connection.execute(sql,args))[0]:query;
+ const [record]=await execute(`SELECT e.id,e.title,e.event_date,e.course_id,c.title course,m.id member_id,a.status
+  FROM events e JOIN courses c ON c.id=e.course_id
+  JOIN members m ON m.user_id=? AND m.status='activo'
+  JOIN course_members cm ON cm.member_id=m.id AND cm.course_id=c.id
+  JOIN enrollments en ON en.course_id=c.id AND en.user_id=?
+  LEFT JOIN attendance a ON a.event_id=e.id AND a.member_id=m.id
+  WHERE e.id=? AND e.status='programado' AND e.checkin_token_hash=?${connection?' FOR UPDATE':''}`,[user.id,user.id,eventId,hash(token)]);
+ if(!record)fail(403,'El QR no está activo para tu cuenta o el curso no está entre tus inscripciones');
+ return record;
+}
+app.get('/api/check-in/:event/:token',wrap(async(req,res)=>{
+ const record=await checkinAccess(req.user,req.params.event,req.params.token);
+ res.json({event:record.title,course:record.course,event_date:record.event_date,status:record.status});
+}));
+app.post('/api/check-in/:event/:token',wrap(async(req,res)=>{
+ const connection=await db.getConnection();
+ try{
+  await connection.beginTransaction();
+  await connection.execute('SELECT id FROM events WHERE id=? FOR UPDATE',[req.params.event]);
+  const record=await checkinAccess(req.user,req.params.event,req.params.token,connection);
+  if(record.status)fail(409,'Ya tienes un estado registrado para esta sesión. Consulta al docente si necesitas corregirlo.');
+  await connection.execute("INSERT INTO attendance(event_id,member_id,status,recorded_by) VALUES(?,?,'presente',?)",[record.id,record.member_id,req.user.id]);
+  await connection.commit();
+  res.json({ok:true,status:'presente'});
+ }catch(error){
+  await connection.rollback();
+  throw error;
+ }finally{connection.release()}
+}));
 app.get('/api/attendance/:event',wrap(async(req,res)=>{allow(req.user,[...academic,'asistencia_pastoral','discipulador']);const e=await eventAccess(req.user,req.params.event);res.json(await query(`SELECT m.id,m.name,m.identification,a.status FROM members m LEFT JOIN attendance a ON a.member_id=m.id AND a.event_id=? LEFT JOIN groups_family g ON g.id=m.group_id WHERE m.status='activo' ${e.course_id?'AND m.id IN(SELECT member_id FROM course_members WHERE course_id=?)':e.group_id?'AND m.group_id=?':''} ${groupScope(req.user)?'AND g.leader_id=?':''} ORDER BY m.name`,[e.id,...(e.course_id?[e.course_id]:e.group_id?[e.group_id]:[]),...(groupScope(req.user)?[req.user.id]:[])]))}));
 app.post('/api/attendance/:event',wrap(async(req,res)=>{allow(req.user,[...academic,'asistencia_pastoral','discipulador']);const e=await eventAccess(req.user,req.params.event);if(e.status==='cancelado')fail(400,'Evento cancelado');const d=z.object({member_id:z.number().int().positive(),status:z.enum(['presente','ausente','justificado','visitante'])}).parse(req.body);const [m]=await query('SELECT m.group_id,g.leader_id FROM members m LEFT JOIN groups_family g ON g.id=m.group_id WHERE m.id=? AND m.status=\'activo\'',[d.member_id]);if(!m||(e.group_id&&m.group_id!==e.group_id)||(groupScope(req.user)&&m.leader_id!==req.user.id))fail(403,'Miembro fuera del alcance de la lista');if(e.course_id){const [enrolled]=await query('SELECT member_id FROM course_members WHERE course_id=? AND member_id=?',[e.course_id,d.member_id]);if(!enrolled)fail(403,'Alumno no inscrito');}const [old]=await query('SELECT status FROM attendance WHERE event_id=? AND member_id=?',[e.id,d.member_id]);if(old)allow(req.user,pastoral);if(old)await query('UPDATE attendance SET status=?,recorded_by=? WHERE event_id=? AND member_id=?',[d.status,req.user.id,e.id,d.member_id]);else await query('INSERT INTO attendance VALUES(?,?,?,?,NOW())',[e.id,d.member_id,d.status,req.user.id]);res.json({ok:true})}));
 tracking(app,wrap,allow,fail);
@@ -189,5 +234,5 @@ if(process.env.VERCEL!=='1'){
  app.use(express.static(path.join(root,'dist')));
  app.get('*',(req,res)=>res.sendFile(path.join(root,'dist/index.html')));
 }
-app.use((err,req,res,next)=>{if(res.headersSent)return next(err);const status=err instanceof z.ZodError?400:err.code==='ER_DUP_ENTRY'?409:err.status||500;res.status(status).json({error:status===400?'Revisa los campos del formulario':status===409?'El registro ya existe':status===500?'No se pudo completar la operación':err.message})});
+app.use((err,req,res,next)=>{if(res.headersSent)return next(err);const status=err instanceof z.ZodError?400:err.code==='ER_DUP_ENTRY'?409:err.status||500;res.status(status).json({error:err instanceof z.ZodError?'Revisa los campos del formulario':err.code==='ER_DUP_ENTRY'?'El registro ya existe':status===500?'No se pudo completar la operación':err.message})});
 export {app};

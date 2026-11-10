@@ -231,6 +231,8 @@ CREATE TABLE IF NOT EXISTS `events` (
   `group_id` int(10) unsigned DEFAULT NULL,
   -- Identificador del curso relacionado, en courses.
   `course_id` int(10) unsigned DEFAULT NULL,
+  -- Huella del token activo para confirmar asistencia por QR.
+  `checkin_token_hash` char(64) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `group_id` (`group_id`),
   CONSTRAINT `events_ibfk_1` FOREIGN KEY (`group_id`) REFERENCES `groups_family` (`id`)
@@ -388,4 +390,3 @@ CREATE TABLE IF NOT EXISTS `auditoria_permisos` (
   CONSTRAINT `auditoria_permisos_ibfk_1` FOREIGN KEY (`actor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `auditoria_permisos_ibfk_2` FOREIGN KEY (`objetivo_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-

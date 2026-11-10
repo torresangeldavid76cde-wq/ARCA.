@@ -1,7 +1,9 @@
 USE arc;
 
--- Idempotent migration for ARCA access requests and role permissions.
 SET @s=DATABASE();
+SET @q=IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@s AND TABLE_NAME='events' AND COLUMN_NAME='checkin_token_hash')=0,'ALTER TABLE events ADD COLUMN checkin_token_hash CHAR(64) NULL','SELECT 1'); PREPARE x FROM @q; EXECUTE x; DEALLOCATE PREPARE x;
+
+-- Idempotent migration for ARCA access requests and role permissions.
 SET @estado_existia=(SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@s AND TABLE_NAME='users' AND COLUMN_NAME='estado');
 SET @q=IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@s AND TABLE_NAME='users' AND COLUMN_NAME='estado')=0,
  'ALTER TABLE users ADD COLUMN estado ENUM(''pendiente'',''activa'',''rechazada'',''suspendida'') NOT NULL DEFAULT ''activa''','SELECT 1'); PREPARE x FROM @q; EXECUTE x; DEALLOCATE PREPARE x;
