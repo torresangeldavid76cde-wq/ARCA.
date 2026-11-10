@@ -54,9 +54,26 @@ cambiarse también allí. No se ha reescrito el historial remoto.
 Antes de desplegar esta versión en una base existente, aplica con una cuenta
 administrativa la columna de confirmación (solo si aún no existe):
 
+Selecciona primero la base indicada por `DB_NAME` en **Production** de Vercel,
+no la base local. En TiDB Cloud, abre el clúster y luego **SQL Editor**.
+Comprueba el contexto y la columna antes de modificar el esquema:
+
+```sql
+SELECT DATABASE();
+SHOW COLUMNS FROM events LIKE 'checkin_token_hash';
+```
+
+Si no hay una base seleccionada, usa `USE nombre_de_la_base;` con el nombre
+de `DB_NAME`. Solo si `SHOW COLUMNS` devuelve cero filas, ejecuta:
+
 ```sql
 ALTER TABLE events ADD COLUMN checkin_token_hash CHAR(64) NULL;
 ```
+
+Repite `SHOW COLUMNS`: debe mostrar una fila de tipo `char(64)` que admite
+`NULL`. `/api/health` solo comprueba la conexión; no demuestra que la migración
+esté aplicada. Después de desplegar, genera un QR desde una sesión de curso
+en el dominio público y comprueba que aparece la imagen sin error.
 
 La inicialización local aplica este cambio automáticamente y de forma idempotente.
 No ejecutes `db:init` contra producción. Despliega tanto la API como la interfaz

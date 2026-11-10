@@ -31,6 +31,7 @@ La base anterior `arca_nueva` se conserva como respaldo de la migración a `arc`
 
 ## Flujo de trabajo
 
+- **Menú lateral:** se puede abrir o cerrar y desplazar verticalmente con rueda, panel táctil o gesto táctil para acceder a todas las opciones en pantallas bajas y teléfonos.
 - **Accesos:** al solicitar una cuenta se pide fecha de nacimiento y EPS; la solicitud queda pendiente de aprobación. El coordinador puede crear cuentas, asignar roles disponibles (excepto administrador), vincularlas con un perfil de miembro e inscribirlas en cursos. Las cuentas existentes de Pastor, Rector, Multimedia y Asistencia pastoral se conservan, pero esos roles ya no se ofrecen para nuevas asignaciones. La contraseña temporal se muestra una vez y se cambia en el primer ingreso. No hay envío automático de correos.
 - **Permisos:** administración puede aprobar solicitudes y, en **Cambiar roles de personas aprobadas**, reasignar el rol de una cuenta existente (también si está suspendida). Selecciona el nuevo rol y pulsa **Guardar rol**; el cambio se aplica a la siguiente petición, sin modificar grupos ni cursos. No se permite cambiar el propio rol ni dejar la aplicación sin un administrador activo. Los cambios quedan en la auditoría.
 - **Discípulos (antes Miembros):** registra nombre, identificación, celular, nacimiento, correo, RH, EPS, función, sede, emergencia, cobertura, foto y nacido de nuevo. La edad se calcula desde la fecha de nacimiento. El estado puede ser activo, inactivo o retirado. Se conservan los perfiles y permisos existentes.
