@@ -93,7 +93,7 @@ async function ensureServer(){
     if(!await listening(databaseHost,databasePort))throw new Error('La base local no pudo iniciar. Revisa desktop-database.log.');
   }
   if(!await listening('127.0.0.1',port)){
-    await launchBackground(process.execPath,[path.join(root,'server','index.js')],'desktop-server.log');
+    await launchBackground(process.execPath,[path.join(root,'server','start.js')],'desktop-server.log');
   }
   for(let i=0;i<60;i++){
     if(await healthy())return;

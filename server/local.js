@@ -23,6 +23,6 @@ const secret=fs.readFileSync(adminFile,'utf8').split('Root password: ')[1].trim(
 await child('server/init.js',{DB_ADMIN_USER:'root',DB_ADMIN_PASSWORD:secret});
 await new Promise((resolve,reject)=>{const p=spawn(process.execPath,['node_modules/vite/bin/vite.js','build'],{cwd:root,stdio:'inherit',windowsHide:true});p.on('exit',code=>code===0?resolve():reject(Error('No se pudo compilar la interfaz ARCA')));p.on('error',reject)});
 if(process.argv.includes('--export'))await child('server/export-schema.js');
-const api=spawn(process.execPath,['server/index.js'],{cwd:root,stdio:'inherit',windowsHide:true});
+const api=spawn(process.execPath,['server/start.js'],{cwd:root,stdio:'inherit',windowsHide:true});
 if(process.argv.includes('--verify')){let ready=false;for(let i=0;i<120;i++){try{const r=await fetch('http://127.0.0.1:4180/api/health');if(r.ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,500))}if(!ready){api.kill();db.kill();throw Error('La API no inició')}try{await child('tests/access.test.js')}catch(e){api.kill();db.kill();throw e}}
 const stop=()=>{api.kill();db.kill();process.exit()};process.on('SIGINT',stop);process.on('SIGTERM',stop);

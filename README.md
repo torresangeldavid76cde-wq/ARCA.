@@ -16,6 +16,8 @@ El iniciador utiliza Node.js y MariaDB de `C:\xampp\mysql`. Levanta una instanci
 
 El proyecto separa la interfaz estática de Vite y la API Express, que se ejecuta como una función de Vercel. La base local de XAMPP no se publica ni es accesible desde Vercel; necesitas una instancia MySQL alojada que permita conexiones desde Vercel y use TLS.
 
+Las rutas de `vercel.json` envían primero `/api` y sus subrutas a `api/index.js`, después resuelven archivos estáticos y finalmente sirven la interfaz. No reemplaces ese orden con una regla global hacia `index.html`: el login devolvería 405 sin JSON. Puedes verificar el enrutamiento y la validación del login sin consultar la base con `node --test tests/hosting.test.js`.
+
 1. Confirma que el esquema `arc` y sus migraciones están aplicados en el MySQL alojado. No ejecutes `npm run db:init` contra producción: crea cuentas de demostración.
 2. Importa el repositorio en Vercel. La configuración de este proyecto compila con `npm run build` y publica `dist`.
 3. En **Settings → Environment Variables** de Vercel, configura `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` y `DB_PASSWORD` para Production. Añade `DB_SSL=true`, `DB_CONNECTION_LIMIT=2` y `TRUST_PROXY_HOPS=1`. Usa una cuenta MySQL exclusiva para la aplicación, con permisos mínimos; no copies credenciales al repositorio ni al chat.
