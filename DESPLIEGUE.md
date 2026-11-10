@@ -49,6 +49,19 @@ cambiarse también allí. No se ha reescrito el historial remoto.
 
 ## Comprobación local de estos cambios
 
+### Foto de la cuenta
+
+Antes de desplegar la carga de foto personal, comprueba en la base de producción:
+
+```sql
+SHOW COLUMNS FROM users LIKE 'photo_data';
+```
+
+Solo si no devuelve filas, ejecuta `ALTER TABLE users ADD COLUMN photo_data MEDIUMTEXT NULL;`.
+Repite la consulta y confirma el tipo `mediumtext` antes de publicar la API.
+La foto de los discípulos sigue utilizando `members.photo_data`; no se copian
+ni se sobrescriben automáticamente las fotos entre ambos perfiles.
+
 ### Actualización de asistencia por QR
 
 Antes de desplegar esta versión en una base existente, aplica con una cuenta

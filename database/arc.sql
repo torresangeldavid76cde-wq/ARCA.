@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `email` varchar(190) NOT NULL,
   -- Huella cifrada de la contraseña; no contiene la contraseña en texto legible.
   `password_hash` varchar(100) NOT NULL,
+  `photo_data` mediumtext DEFAULT NULL,
   -- Rol asignado a la cuenta; puede quedar vacío mientras espera aprobación.
   `role` varchar(40) DEFAULT NULL,
   -- Cuenta habilitada: 1 = sí, 0 = no.

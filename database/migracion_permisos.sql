@@ -1,6 +1,7 @@
 USE arc;
 
 SET @s=DATABASE();
+SET @q=IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@s AND TABLE_NAME='users' AND COLUMN_NAME='photo_data')=0,'ALTER TABLE users ADD COLUMN photo_data MEDIUMTEXT NULL','SELECT 1'); PREPARE x FROM @q; EXECUTE x; DEALLOCATE PREPARE x;
 SET @q=IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@s AND TABLE_NAME='events' AND COLUMN_NAME='checkin_token_hash')=0,'ALTER TABLE events ADD COLUMN checkin_token_hash CHAR(64) NULL','SELECT 1'); PREPARE x FROM @q; EXECUTE x; DEALLOCATE PREPARE x;
 
 -- Idempotent migration for ARCA access requests and role permissions.
