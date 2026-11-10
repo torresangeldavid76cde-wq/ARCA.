@@ -1,0 +1,10 @@
+.git
+.qodo
+.env
+.env.*
+CUENTAS-DEMO.txt
+runtime
+node_modules
+dist
+tests
+*.log

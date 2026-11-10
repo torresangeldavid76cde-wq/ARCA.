@@ -13,6 +13,10 @@ import {db,query} from './db.js';
 import {tracking} from './tracking.js';
 import {roles,attendanceRoles,managers,personal,pastoral,academic,canGrant} from './access.js';
 const app=express(),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+// Set this only for the known number of reverse proxies in the hosting path.
+const proxyHops=process.env.TRUST_PROXY_HOPS||'0';
+if(!/^\d+$/.test(proxyHops)||Number(proxyHops)>10)throw new Error('TRUST_PROXY_HOPS debe ser un entero entre 0 y 10');
+app.set('trust proxy',Number(proxyHops));
 app.use(helmet({contentSecurityPolicy:{directives:{'img-src':["'self'",'data:'],'script-src':["'self'"],'media-src':["'self'"]}}}));
 app.use(express.json({limit:'1200kb'}),cookieParser());
 app.use('/api',(req,res,next)=>{res.set('Cache-Control','no-store');if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.headers.origin&&req.headers.origin!==`${req.protocol}://${req.get('host')}`)return res.status(403).json({error:'Origen no permitido'});next()});
@@ -184,5 +188,6 @@ app.use('/api',(req,res)=>res.status(404).json({error:'Ruta inexistente'}));
 app.use(express.static(path.join(root,'dist')));
 app.get('*',(req,res)=>res.sendFile(path.join(root,'dist/index.html')));
 app.use((err,req,res,next)=>{if(res.headersSent)return next(err);const status=err instanceof z.ZodError?400:err.code==='ER_DUP_ENTRY'?409:err.status||500;res.status(status).json({error:status===400?'Revisa los campos del formulario':status===409?'El registro ya existe':status===500?'No se pudo completar la operación':err.message})});
-const server=app.listen(Number(process.env.PORT||4180),'127.0.0.1',()=>console.log('ARCA disponible en http://127.0.0.1:'+(process.env.PORT||4180)));
+const host=process.env.HOST||(process.env.NODE_ENV==='production'?'0.0.0.0':'127.0.0.1');
+const server=app.listen(Number(process.env.PORT||4180),host,()=>console.log(`ARCA escuchando en ${host}:${server.address().port}`));
 export {app,server};
