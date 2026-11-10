@@ -1,0 +1,20 @@
+.brand-intro{position:fixed;inset:0;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#130b20;color:#fff;overflow:hidden;z-index:1000}
+.brand-intro::backdrop{background:#130b20}
+.brand-intro video{display:block;width:100%;height:100%;object-fit:contain}
+.intro-controls{position:absolute;inset:24px 28px auto;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.intro-controls>span{font-size:10px;letter-spacing:2.5px;color:#d2bbdb}
+.intro-controls b{color:#efa34b;padding:0 10px}
+.intro-controls button{display:flex;align-items:center;gap:20px;padding:12px 18px;border-radius:30px;border:1px solid #d7bdde60;background:#ffffff0d;color:#fff;font-size:12px;backdrop-filter:blur(12px)}
+.intro-controls button:hover{background:#ffffff20}
+.intro-controls button:focus-visible{outline:2px solid #ffd084;outline-offset:4px}
+.auth-wrap{position:relative;display:flex;align-items:center;justify-content:center;padding:54px 20px 64px;background:radial-gradient(ellipse at 25% 18%,#532c48aa,transparent 55%),radial-gradient(ellipse at 75% 45%,#43226699,transparent 55%),#100921}
+.auth-story{display:none}
+.auth-card{padding:0;max-width:475px;border-radius:28px;overflow:hidden;background:#160e21;border:1px solid #ffffff0b;box-shadow:0 30px 90px #08031245;margin:0}
+.auth-heading{padding:34px 28px 27px;background:radial-gradient(ellipse at 20% 0%,#72413999,transparent 55%),linear-gradient(130deg,#240d4a,#38165d 68%,#743653)}
+.auth-heading img{width:76px;margin-bottom:20px}
+.auth-heading h2{font-size:30px}
+.auth-heading p{margin-bottom:0}
+.auth-card form{padding:32px 36px 0}
+.auth-foot{padding:22px 24px 25px}
+.auth-card .muted{margin:22px 0 26px}
+@media(max-width:520px){.intro-controls{inset:18px 16px auto}.intro-controls>span{font-size:8px;letter-spacing:1px}.intro-controls b{padding:0 3px}.intro-controls button{font-size:11px;gap:10px}.auth-wrap{padding:28px 16px 40px;min-height:calc(100dvh - 80px)}.auth-card{border-radius:22px}.auth-heading{padding:28px 16px}.auth-heading h2{font-size:27px}.auth-heading p{font-size:13px}.auth-card form{padding:26px 24px 0}.auth-card .two{grid-template-columns:1fr}.auth-card .two label{margin-bottom:0}.auth-card .two{margin-bottom:20px;gap:20px}}

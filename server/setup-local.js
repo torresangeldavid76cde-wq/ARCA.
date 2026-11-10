@@ -1,0 +1,14 @@
+import mysql from 'mysql2/promise';
+import {randomBytes} from 'node:crypto';
+import fs from 'node:fs/promises';
+const port=Number(process.env.DB_PORT||3306);
+const c=await mysql.createConnection({host:'127.0.0.1',port,user:'root'});
+const password=randomBytes(30).toString('hex'),rootPassword=randomBytes(30).toString('hex');
+await c.query('CREATE DATABASE IF NOT EXISTS arc CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+await c.query("CREATE USER 'arca_app'@'127.0.0.1' IDENTIFIED BY ?",[password]);
+await c.query("GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,REFERENCES ON arc.* TO 'arca_app'@'127.0.0.1'");
+const [roots]=await c.query("SELECT Host FROM mysql.user WHERE User='root'");
+for(const r of roots)await c.query('ALTER USER ?@? IDENTIFIED BY ?',['root',r.Host,rootPassword]);
+await fs.writeFile(new URL('../.env',import.meta.url),`PORT=4180\nDB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=arc\nDB_USER=arca_app\nDB_PASSWORD=${password}\n`);
+await fs.writeFile(new URL('../runtime/database-admin.txt',import.meta.url),`Local MariaDB isolated instance, port ${port}. Root password: ${rootPassword}`);
+await c.end();console.log('Instancia local aislada asegurada y conexión guardada en .env.');
