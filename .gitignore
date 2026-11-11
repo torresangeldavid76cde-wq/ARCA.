@@ -7,3 +7,7 @@ CUENTAS-DEMO.txt
 runtime/
 .vercel/
 *.log
+*.pem
+*.key
+*.p12
+*.pfx

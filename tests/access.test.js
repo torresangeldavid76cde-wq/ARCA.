@@ -43,7 +43,7 @@ assert.equal((await call('/admin/usuarios','GET',null,coordinator)).status,403);
 assert.ok((await call('/admin/usuarios','GET',null,admin)).body.some(u=>u.id===id&&u.role==='estudiante'));
 assert.equal((await call('/admin/usuarios/'+id+'/rol','PUT',{role:'docente'})).status,401);
 assert.equal((await call('/admin/usuarios/'+id+'/rol','PUT',{role:'docente'},coordinator)).status,403);
-assert.equal((await call('/admin/usuarios/'+id+'/rol','PUT',{role:'multimedia'},admin)).status,400);
+assert.equal((await call('/admin/usuarios/'+id+'/rol','PUT',{role:'multimedia'},admin)).status,200);
 const adminId=(await call('/me','GET',null,admin)).body.id;
 assert.equal((await call('/admin/usuarios/'+adminId+'/rol','PUT',{role:'estudiante'},admin)).status,403);
 assert.equal((await call('/admin/usuarios/4294967295/rol','PUT',{role:'docente'},admin)).status,404);
@@ -68,7 +68,7 @@ const preservedAdminPermissions=(await call('/admin/permisos','GET',null,admin))
 assert.ok(preservedAdminPermissions.every(row=>row.puede_ver&&row.puede_crear&&row.puede_editar&&row.puede_eliminar));
 const suffix=String(Date.now());
 const disciplerUser=(await call('/me','GET',null,discipler)).body;
-assert.equal((await call('/members','POST',{name:'Miembro de prueba',id_type:'DEMO',identification:'TEST-'+suffix,phone:'0000000000',birthday:'2000-01-01',group_id:null},admin)).status,201);
+assert.equal((await call('/members','POST',{name:'Miembro de prueba',id_type:'CC',identification:'TEST-'+suffix,phone:'0000000000',birthday:'2000-01-01',group_id:null},admin)).status,201);
 const member=(await call('/members','GET',null,admin)).body.find(m=>m.identification==='TEST-'+suffix);
 assert.equal((await call('/members/'+member.id,'PATCH',{photo_data:testPhoto},student)).status,403);
 assert.equal((await call('/members/'+member.id,'PATCH',{photo_data:testPhoto},discipler)).status,403);
@@ -106,7 +106,7 @@ const qrStudentCreated=await call('/users','POST',{...accountFields,name:'Estudi
 const qrStudentLogin=await call('/login','POST',{email:qrStudentEmail,password:qrStudentCreated.body.password,terms:true});assert.equal(qrStudentLogin.status,200);
 assert.equal((await call('/password','POST',{current:qrStudentCreated.body.password,password:'QR-estudiante-2026!'},qrStudentLogin.cookie)).status,200);
 const qrStudentId=(await call('/users','GET',null,admin)).body.find(u=>u.email===qrStudentEmail).id;
-assert.equal((await call('/members','POST',{name:'Perfil estudiante QR',id_type:'DEMO',identification:'QR-'+suffix,phone:'0000000000',birthday:'2000-01-01',group_id:null},admin)).status,201);
+assert.equal((await call('/members','POST',{name:'Perfil estudiante QR',id_type:'CC',identification:'QR-'+suffix,phone:'0000000000',birthday:'2000-01-01',group_id:null},admin)).status,201);
 const qrMember=(await call('/members','GET',null,admin)).body.find(m=>m.identification==='QR-'+suffix);
 assert.equal((await call('/users/'+qrStudentId+'/member','PUT',{member_id:qrMember.id},coordinator)).status,200);
 assert.equal((await call('/attendance/'+groupEvent.id+'/qr','POST',{},student)).status,403);

@@ -1,5 +1,9 @@
 # Publicación de ARCA
 
+Para publicar en **Vercel con MySQL en Aiven**, sigue
+[AIVEN-VERCEL.md](AIVEN-VERCEL.md). El flujo usa GitHub para el código, variables
+privadas para TLS y credenciales, y comandos de migración fuera del build.
+
 ARCA necesita un servicio Node y MySQL persistente. El Dockerfile compila React
 y sirve la interfaz y la API desde el mismo dominio. No incluye archivos `.env`,
 cuentas demo ni la base local en la imagen.

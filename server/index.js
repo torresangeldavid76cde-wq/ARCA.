@@ -12,7 +12,7 @@ import PDFDocument from 'pdfkit';
 import {db,query} from './db.js';
 import {tracking} from './tracking.js';
 import {photoSchema} from './profile-photo.js';
-import {roles,attendanceRoles,managers,personal,pastoral,academic,canGrant} from './access.js';
+import {roles,roleKeys,assignableRoles,attendanceRoles,managers,personal,pastoral,academic,canGrant} from './access.js';
 const app=express(),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 // Set this only for the known number of reverse proxies in the hosting path.
 const proxyHops=process.env.TRUST_PROXY_HOPS||(process.env.VERCEL==='1'?'1':'0');
@@ -25,6 +25,30 @@ const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const fail=(status,message)=>{const e=new Error(message);e.status=status;throw e};
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const allow=(user,list)=>{if(!list.includes(user.role))fail(403,'No tienes permiso para esta acción')};
+const moduleRules=[
+ [/^\/admin\/roles(?:\/|$)/,'Roles'],
+ [/^\/admin(?:\/|$)/,'Permisos'],
+ [/^\/members(?:\/|$)/,'Discípulos'],
+ [/^\/groups(?:\/|$)/,'Grupos familiares'],
+ [/^\/sunday-services(?:\/|$)/,'Servicios'],
+ [/^\/attendance(?:\/|$)/,'Asistencia'],
+ [/^\/courses(?:\/|$)/,'Adiestramiento'],
+ [/^\/events(?:\/|$)/,'Eventos'],
+ [/^\/users(?:\/|$)/,'Accesos'],
+ [/^\/member-link-options$/,'Accesos'],
+ [/^\/teachers$/,'Adiestramiento'],
+ [/^\/report-options$/,'Reportes'],
+ [/^\/reports(?:\/|$)/,'Reportes'],
+ [/^\/tracking$/,'Inicio'],
+ [/^\/stats$/,'Inicio']
+];
+const moduleForRequest=req=>req.path==='/groups'&&req.method==='GET'&&req.user.role!=='administrador'?['Grupos familiares','Discípulos','Eventos','Servicios']:moduleRules.find(([pattern])=>pattern.test(req.path))?.[1];
+const actionForRequest=req=>req.method==='GET'||req.method==='HEAD'?'puede_ver':req.method==='POST'?'puede_crear':req.method==='DELETE'?'puede_eliminar':'puede_editar';
+async function moduleAllowed(user,module,action){
+ if(user.role==='administrador')return true;
+ const [permission]=await query('SELECT p.aplicado,p.'+action+' allowed FROM permisos_rol p JOIN roles r ON r.id=p.rol_id JOIN modulos m ON m.id=p.modulo_id WHERE r.nombre=? AND m.nombre=?',[user.role,module]);
+ return !permission||Number(permission.aplicado)!==1||Number(permission.allowed)===1;
+}
 const text=z.string().trim().min(1).max(160),optional=z.string().trim().max(500).optional().default('');
 const validDate=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s=>!isNaN(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s);
 const birthDate=validDate.refine(s=>s<=new Date().toISOString().slice(0,10),'La fecha de nacimiento no puede ser futura');
@@ -33,9 +57,21 @@ app.get('/api/health',wrap(async(req,res)=>{await query('SELECT 1');res.json({ok
 app.post('/api/register',createLoginRateLimit(),wrap(async(req,res)=>{const d=z.object({name:text,email:z.string().email().max(190),password:z.string().min(12).max(100),birthday:birthDate,eps:z.string().trim().min(1).max(100),terms:z.literal(true)}).parse(req.body);const result=await query("INSERT INTO users(name,email,password_hash,role,birthday,eps,active,must_change,estado,metodo_registro) VALUES(?,?,?,NULL,?,?,TRUE,FALSE,'pendiente','correo')",[d.name,d.email.toLowerCase(),await bcrypt.hash(d.password,12),d.birthday,d.eps]);await query("INSERT INTO solicitudes_acceso(user_id,metodo_registro) VALUES(?,'correo')",[result.insertId]);await query("INSERT INTO notificaciones(user_id,tipo,mensaje) SELECT id,'solicitud','Nueva solicitud de acceso pendiente' FROM users WHERE role='administrador'");res.status(201).json({ok:true,message:'Tu solicitud fue enviada. Un administrador revisará tu cuenta y te asignará un rol.'})}));
 app.post('/api/login',createLoginRateLimit(),wrap(async(req,res)=>{const d=z.object({email:z.string().email().max(190),password:z.string().min(1).max(128),terms:z.literal(true)}).parse(req.body);const [u]=await query('SELECT * FROM users WHERE email=? AND active=TRUE',[d.email.toLowerCase()]);if(!u||!await bcrypt.compare(d.password,u.password_hash))fail(401,'Correo o contraseña incorrectos');const token=randomBytes(32).toString('hex');await query('INSERT INTO sessions VALUES(?,?,DATE_ADD(NOW(),INTERVAL 8 HOUR))',[hash(token),u.id]);await query('INSERT INTO audit(user_id,action) VALUES(?,?)',[u.id,'Inicio de sesión; aceptación de términos v1']);res.cookie('arca_session',token,{httpOnly:true,sameSite:'strict',secure:process.env.NODE_ENV==='production',maxAge:8*3600e3,path:'/'}).json({ok:true})}));
 app.use('/api',wrap(async(req,res,next)=>{const [u]=await query('SELECT u.id,u.name,u.email,u.role,u.must_change,u.estado,u.motivo_rechazo,u.created_at,(SELECT s.fecha_solicitud FROM solicitudes_acceso s WHERE s.user_id=u.id ORDER BY s.id DESC LIMIT 1) fecha_solicitud FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>NOW() AND u.active=TRUE',[hash(req.cookies.arca_session||'')]);if(!u)fail(401,'Inicia sesión para continuar');req.user=u;if(u.estado!=='activa'&&!['/me','/logout','/solicitud/estado'].includes(req.path))fail(403,'Tu cuenta aún no tiene acceso activo');if(u.estado==='activa'&&!u.role)fail(403,'Tu cuenta necesita un rol asignado');if(u.must_change&&!['/me','/password','/logout'].includes(req.path))fail(403,'Cambia tu contraseña temporal para continuar');next()}));
+app.use('/api',wrap(async(req,res,next)=>{
+ const module=moduleForRequest(req);
+ if(!module||(req.path==='/events'&&req.method==='GET'))return next();
+ const modules=Array.isArray(module)?module:[module];
+ const allowed=await Promise.all(modules.map(name=>moduleAllowed(req.user,name,actionForRequest(req))));
+ if(!allowed.some(Boolean))fail(403,'No tienes permiso para este módulo');
+ next();
+}));
 app.get('/api/me',wrap(async(req,res)=>{
  const [profile]=await query('SELECT photo_data FROM users WHERE id=?',[req.user.id]);
- res.json({...req.user,photo_data:profile.photo_data||''});
+ const module_permissions=await query('SELECT m.nombre modulo,p.aplicado,p.puede_ver FROM roles r JOIN permisos_rol p ON p.rol_id=r.id JOIN modulos m ON m.id=p.modulo_id WHERE r.nombre=?',[req.user.role]);
+ res.json({...req.user,photo_data:profile.photo_data||'',module_permissions});
+}));
+app.get('/api/roles',wrap(async(req,res)=>{
+ res.json(await query('SELECT nombre,nombre_visible FROM roles ORDER BY id'));
 }));
 app.put('/api/me/photo',wrap(async(req,res)=>{
  const {photo_data}=z.object({photo_data:photoSchema}).strict().parse(req.body);
@@ -65,10 +101,6 @@ app.post('/api/sunday-services',wrap(async(req,res)=>{
 }));
 app.get('/api/members/:id/history',wrap(async(req,res,next)=>{adminOnly(req.user);next()}));
 app.get('/api/reports/asistencia/:format',wrap(async(req,res,next)=>{allow(req.user,[...pastoral,'multimedia']);next()}));
-app.get('/api/courses',wrap(async(req,res,next)=>{
- if(!['docente','discipulador'].includes(req.user.role))return next();
- res.json(await query(`SELECT c.*,u.name teacher,(SELECT COUNT(*) FROM course_members e WHERE e.course_id=c.id) enrolled FROM courses c LEFT JOIN users u ON u.id=c.teacher_id WHERE c.teacher_id=? OR EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id=c.id AND e.user_id=?) ORDER BY c.id`,[req.user.id,req.user.id]));
-}));
 app.get('/api/member-link-options',wrap(async(req,res)=>{allow(req.user,managers);res.json(await query("SELECT id,name,email,user_id FROM members WHERE status<>'retirado' ORDER BY name"))}));
 app.put('/api/users/:id/member',wrap(async(req,res)=>{
  allow(req.user,managers);
@@ -119,22 +151,68 @@ app.put('/api/users/:id/courses',wrap(async(req,res)=>{
 app.get('/api/admin/attendance-history',wrap(async(req,res)=>{adminOnly(req.user);res.json(await query("SELECT m.name,e.title event,c.title course,DATE_FORMAT(e.event_date,'%Y-%m-%d %H:%i') event_date,a.status FROM attendance a JOIN members m ON m.id=a.member_id JOIN events e ON e.id=a.event_id LEFT JOIN courses c ON c.id=e.course_id ORDER BY e.event_date DESC,m.name"))}));
 app.get('/api/report-options',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);res.json(await query('SELECT id,title,area FROM courses ORDER BY area,title'))}));
 app.get('/api/admin/solicitudes',wrap(async(req,res)=>{adminOnly(req.user);const estado=z.enum(['pendiente','activa','rechazada']).optional().parse(req.query.estado);const term=String(req.query.q||'').slice(0,160);res.json(await query(`SELECT s.id,s.estado,s.metodo_registro,s.fecha_solicitud,s.motivo_rechazo,u.id user_id,u.name,u.email FROM solicitudes_acceso s JOIN users u ON u.id=s.user_id WHERE (? IS NULL OR s.estado=?) AND (?='' OR u.name LIKE CONCAT('%',?,'%') OR u.email LIKE CONCAT('%',?,'%')) ORDER BY s.fecha_solicitud DESC`,[estado||null,estado||null,term,term,term]))}));
-app.post('/api/admin/solicitudes/:id/aprobar',wrap(async(req,res)=>{adminOnly(req.user);const {role}=z.object({role:z.enum(roles)}).parse(req.body);const [s]=await query("SELECT id,user_id FROM solicitudes_acceso WHERE id=? AND estado='pendiente'",[req.params.id]);if(!s)fail(404,'Solicitud pendiente inexistente');await query("UPDATE users SET role=?,estado='activa',active=TRUE,aprobado_por=?,fecha_aprobacion=NOW(),motivo_rechazo=NULL WHERE id=?",[role,req.user.id,s.user_id]);await query("UPDATE solicitudes_acceso SET estado='activa',aprobado_por=?,fecha_resolucion=NOW() WHERE id=?",[req.user.id,s.id]);await query("INSERT INTO auditoria_permisos(actor_id,objetivo_id,accion,detalle) VALUES(?,?,?,?)",[req.user.id,s.user_id,'aprobacion',`Rol asignado: ${role}`]);await query("INSERT INTO notificaciones(user_id,tipo,mensaje) VALUES(?,'aprobacion','Tu solicitud fue aprobada')",[s.user_id]);res.json({ok:true})}));
+app.post('/api/admin/solicitudes/:id/aprobar',wrap(async(req,res)=>{adminOnly(req.user);const {role}=z.object({role:z.enum(assignableRoles)}).parse(req.body);const [s]=await query("SELECT id,user_id FROM solicitudes_acceso WHERE id=? AND estado='pendiente'",[req.params.id]);if(!s)fail(404,'Solicitud pendiente inexistente');await query("UPDATE users SET role=?,estado='activa',active=TRUE,aprobado_por=?,fecha_aprobacion=NOW(),motivo_rechazo=NULL WHERE id=?",[role,req.user.id,s.user_id]);await query("UPDATE solicitudes_acceso SET estado='activa',aprobado_por=?,fecha_resolucion=NOW() WHERE id=?",[req.user.id,s.id]);await query("INSERT INTO auditoria_permisos(actor_id,objetivo_id,accion,detalle) VALUES(?,?,?,?)",[req.user.id,s.user_id,'aprobacion',`Rol asignado: ${role}`]);await query("INSERT INTO notificaciones(user_id,tipo,mensaje) VALUES(?,'aprobacion','Tu solicitud fue aprobada')",[s.user_id]);res.json({ok:true})}));
 app.post('/api/admin/solicitudes/:id/rechazar',wrap(async(req,res)=>{adminOnly(req.user);const {motivo}=z.object({motivo:z.string().trim().max(500).default('')}).parse(req.body);const [s]=await query("SELECT id,user_id FROM solicitudes_acceso WHERE id=? AND estado='pendiente'",[req.params.id]);if(!s)fail(404,'Solicitud pendiente inexistente');await query("UPDATE users SET estado='rechazada',motivo_rechazo=? WHERE id=?",[motivo||null,s.user_id]);await query("UPDATE solicitudes_acceso SET estado='rechazada',aprobado_por=?,fecha_resolucion=NOW(),motivo_rechazo=? WHERE id=?",[req.user.id,motivo||null,s.id]);await query("INSERT INTO auditoria_permisos(actor_id,objetivo_id,accion,detalle) VALUES(?,?,?,?)",[req.user.id,s.user_id,'rechazo',motivo||'Sin motivo']);await query("INSERT INTO notificaciones(user_id,tipo,mensaje) VALUES(?,'rechazo','Tu solicitud no fue aprobada')",[s.user_id]);res.json({ok:true})}));
-app.get('/api/admin/permisos',wrap(async(req,res)=>{adminOnly(req.user);res.json(await query('SELECT r.id rol_id,r.nombre rol,m.id modulo_id,m.nombre modulo,p.puede_ver,p.puede_crear,p.puede_editar,p.puede_eliminar FROM roles r CROSS JOIN modulos m LEFT JOIN permisos_rol p ON p.rol_id=r.id AND p.modulo_id=m.id ORDER BY r.id,m.id'))}));
-app.put('/api/admin/permisos',wrap(async(req,res)=>{adminOnly(req.user);const list=z.array(z.object({rol_id:z.number().int().positive(),modulo_id:z.number().int().positive(),puede_ver:z.boolean(),puede_crear:z.boolean(),puede_editar:z.boolean(),puede_eliminar:z.boolean()})).max(500).parse(req.body);const [administratorRole]=await query("SELECT id FROM roles WHERE nombre='administrador'");for(const p of list){const permissions=p.rol_id===administratorRole.id?{...p,puede_ver:true,puede_crear:true,puede_editar:true,puede_eliminar:true}:p;await query('INSERT INTO permisos_rol(rol_id,modulo_id,puede_ver,puede_crear,puede_editar,puede_eliminar) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE puede_ver=VALUES(puede_ver),puede_crear=VALUES(puede_crear),puede_editar=VALUES(puede_editar),puede_eliminar=VALUES(puede_eliminar)',[permissions.rol_id,permissions.modulo_id,permissions.puede_ver,permissions.puede_crear,permissions.puede_editar,permissions.puede_eliminar]);}await query("INSERT INTO auditoria_permisos(actor_id,accion,detalle) VALUES(?,'permisos','Matriz de permisos actualizada')",[req.user.id]);res.json({ok:true})}));
+app.get('/api/admin/permisos',wrap(async(req,res)=>{adminOnly(req.user);res.json(await query('SELECT r.id rol_id,r.nombre rol,m.id modulo_id,m.nombre modulo,p.puede_ver,p.puede_crear,p.puede_editar,p.puede_eliminar,p.aplicado FROM roles r CROSS JOIN modulos m LEFT JOIN permisos_rol p ON p.rol_id=r.id AND p.modulo_id=m.id ORDER BY r.id,m.id'))}));
+app.put('/api/admin/permisos',wrap(async(req,res)=>{adminOnly(req.user);const list=z.array(z.object({rol_id:z.number().int().positive(),modulo_id:z.number().int().positive(),puede_ver:z.boolean(),puede_crear:z.boolean(),puede_editar:z.boolean(),puede_eliminar:z.boolean()})).max(500).parse(req.body);const [administratorRole]=await query("SELECT id FROM roles WHERE nombre='administrador'");for(const p of list){const permissions=p.rol_id===administratorRole.id?{...p,puede_ver:true,puede_crear:true,puede_editar:true,puede_eliminar:true}:p;await query('INSERT INTO permisos_rol(rol_id,modulo_id,puede_ver,puede_crear,puede_editar,puede_eliminar,aplicado) VALUES(?,?,?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE puede_ver=VALUES(puede_ver),puede_crear=VALUES(puede_crear),puede_editar=VALUES(puede_editar),puede_eliminar=VALUES(puede_eliminar),aplicado=TRUE',[permissions.rol_id,permissions.modulo_id,permissions.puede_ver,permissions.puede_crear,permissions.puede_editar,permissions.puede_eliminar]);}await query("INSERT INTO auditoria_permisos(actor_id,accion,detalle) VALUES(?,'permisos','Matriz de permisos actualizada')",[req.user.id]);res.json({ok:true})}));
+app.get('/api/admin/roles',wrap(async(req,res)=>{
+ adminOnly(req.user);
+ const roleRows=await query('SELECT id,nombre,nombre_visible,descripcion FROM roles ORDER BY id');
+ const modules=await query('SELECT id,nombre FROM modulos ORDER BY id');
+ const permissions=await query('SELECT rol_id,modulo_id,puede_ver,puede_crear,puede_editar,puede_eliminar,aplicado FROM permisos_rol');
+ res.json({roles:roleRows.map(role=>({...role,permisos:modules.map(module=>({
+  modulo_id:module.id,
+  modulo:module.nombre,
+  ...(permissions.find(permission=>permission.rol_id===role.id&&permission.modulo_id===module.id)||{puede_ver:0,puede_crear:0,puede_editar:0,puede_eliminar:0,aplicado:0})
+ }))})),modules});
+}));
+app.put('/api/admin/roles/:id',wrap(async(req,res)=>{
+ adminOnly(req.user);
+ const data=z.object({
+  nombre_visible:z.string().trim().min(1).max(80),
+  descripcion:z.string().trim().max(160).default(''),
+  aplicar_permisos:z.boolean().default(false),
+  permisos:z.array(z.object({
+   modulo_id:z.number().int().positive(),
+   puede_ver:z.boolean(),
+   puede_crear:z.boolean(),
+   puede_editar:z.boolean(),
+   puede_eliminar:z.boolean()
+  }).strict()).max(100).default([])
+ }).strict().parse(req.body);
+ const connection=await db.getConnection();
+ try{
+  await connection.beginTransaction();
+  const [[role]]=await connection.execute('SELECT id,nombre FROM roles WHERE id=? FOR UPDATE',[req.params.id]);
+  if(!role)fail(404,'Rol inexistente');
+  const [modules]=await connection.execute('SELECT id FROM modulos ORDER BY id');
+  const moduleIds=new Set(modules.map(module=>Number(module.id)));
+  if(data.aplicar_permisos&&(data.permisos.length!==moduleIds.size||new Set(data.permisos.map(permission=>permission.modulo_id)).size!==moduleIds.size||data.permisos.some(permission=>!moduleIds.has(permission.modulo_id))))fail(400,'La configuración debe incluir una sola vez cada módulo');
+  await connection.execute('UPDATE roles SET nombre_visible=?,descripcion=? WHERE id=?',[data.nombre_visible,data.descripcion,role.id]);
+  if(data.aplicar_permisos)for(const item of data.permisos){
+   const permission=role.nombre==='administrador'?{...item,puede_ver:true,puede_crear:true,puede_editar:true,puede_eliminar:true}:item;
+   await connection.execute('INSERT INTO permisos_rol(rol_id,modulo_id,puede_ver,puede_crear,puede_editar,puede_eliminar,aplicado) VALUES(?,?,?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE puede_ver=VALUES(puede_ver),puede_crear=VALUES(puede_crear),puede_editar=VALUES(puede_editar),puede_eliminar=VALUES(puede_eliminar),aplicado=TRUE',[role.id,permission.modulo_id,permission.puede_ver,permission.puede_crear,permission.puede_editar,permission.puede_eliminar]);
+  }
+  await connection.execute("INSERT INTO auditoria_permisos(actor_id,accion,detalle) VALUES(?,'roles',?)",[req.user.id,`Actualización ${data.aplicar_permisos?'de definición y permisos':'de definición'} del rol ${role.nombre}: ${data.nombre_visible}`]);
+  await connection.commit();
+ }catch(error){
+  await connection.rollback();
+  throw error;
+ }finally{connection.release()}
+ res.json({ok:true});
+}));
 app.get('/api/admin/usuarios',wrap(async(req,res)=>{adminOnly(req.user);res.json(await query("SELECT id,name,email,role,estado FROM users WHERE estado IN ('activa','suspendida') ORDER BY name"))}));
-app.put('/api/admin/usuarios/:id/rol',wrap(async(req,res)=>{adminOnly(req.user);if(Number(req.params.id)===req.user.id)fail(403,'No puedes cambiar tu propio rol');const {role}=z.object({role:z.enum(roles)}).parse(req.body);const [u]=await query('SELECT role FROM users WHERE id=?',[req.params.id]);if(!u)fail(404,'Usuario inexistente');if(u.role==='administrador'&&role!=='administrador'){const [count]=await query("SELECT COUNT(*) n FROM users WHERE role='administrador' AND estado='activa'");if(count.n<=1)fail(400,'Debe quedar al menos un administrador activo')}await query('UPDATE users SET role=? WHERE id=?',[role,req.params.id]);await query("INSERT INTO auditoria_permisos(actor_id,objetivo_id,accion,detalle) VALUES(?,?,?,?)",[req.user.id,req.params.id,'cambio_rol',`${u.role||'sin rol'} → ${role}`]);res.json({ok:true})}));
+app.put('/api/admin/usuarios/:id/rol',wrap(async(req,res)=>{adminOnly(req.user);if(Number(req.params.id)===req.user.id)fail(403,'No puedes cambiar tu propio rol');const {role}=z.object({role:z.enum(roleKeys)}).parse(req.body);const [u]=await query('SELECT role FROM users WHERE id=?',[req.params.id]);if(!u)fail(404,'Usuario inexistente');if(u.role==='administrador'&&role!=='administrador'){const [count]=await query("SELECT COUNT(*) n FROM users WHERE role='administrador' AND estado='activa'");if(count.n<=1)fail(400,'Debe quedar al menos un administrador activo')}await query('UPDATE users SET role=? WHERE id=?',[role,req.params.id]);await query("INSERT INTO auditoria_permisos(actor_id,objetivo_id,accion,detalle) VALUES(?,?,?,?)",[req.user.id,req.params.id,'cambio_rol',`${u.role||'sin rol'} → ${role}`]);res.json({ok:true})}));
 app.put('/api/admin/usuarios/:id/estado',wrap(async(req,res)=>{adminOnly(req.user);if(Number(req.params.id)===req.user.id)fail(403,'No puedes suspenderte a ti mismo');const {estado}=z.object({estado:z.enum(['activa','suspendida'])}).parse(req.body);const [u]=await query('SELECT role,estado FROM users WHERE id=?',[req.params.id]);if(!u)fail(404,'Usuario inexistente');if(estado==='suspendida'&&u.role==='administrador'){const [[n]]=await query("SELECT COUNT(*) n FROM users WHERE role='administrador' AND estado='activa'");if(n<=1)fail(400,'Debe quedar al menos un administrador activo')}await query('UPDATE users SET estado=?,active=? WHERE id=?',[estado,estado==='activa',req.params.id]);if(estado==='suspendida')await query('DELETE FROM sessions WHERE user_id=?',[req.params.id]);await query("INSERT INTO auditoria_permisos(actor_id,objetivo_id,accion,detalle) VALUES(?,?,?,?)",[req.user.id,req.params.id,'estado',estado]);res.json({ok:true})}));
 app.get('/api/notificaciones',wrap(async(req,res)=>{adminOnly(req.user);const [count]=await query("SELECT COUNT(*) n FROM solicitudes_acceso WHERE estado='pendiente'");res.json({pendientes:count.n,notificaciones:await query('SELECT id,tipo,mensaje,creada_en,leida FROM notificaciones WHERE user_id=? ORDER BY creada_en DESC LIMIT 50',[req.user.id])})}));
-app.get('/api/users',wrap(async(req,res)=>{allow(req.user,managers);const assignable=roles.filter(role=>role!=='administrador');const roleScope=req.user.role==='coordinador'?`WHERE u.role IN (${assignable.map(()=>'?').join(',')})`:'';const args=req.user.role==='coordinador'?assignable:[];res.json(await query(`SELECT u.id,u.name,u.email,u.role,u.active,u.birthday,u.eps,m.id member_id,m.name member_name,COALESCE(g.name,(SELECT GROUP_CONCAT(DISTINCT gf.name ORDER BY gf.name SEPARATOR ', ') FROM enrollments en JOIN courses c ON c.id=en.course_id JOIN groups_family gf ON gf.id=c.group_id WHERE en.user_id=u.id AND c.area='discipulado')) group_name,(SELECT GROUP_CONCAT(c.title ORDER BY c.title SEPARATOR ', ') FROM enrollments en JOIN courses c ON c.id=en.course_id WHERE en.user_id=u.id) course_names,(SELECT GROUP_CONCAT(en.course_id ORDER BY en.course_id) FROM enrollments en WHERE en.user_id=u.id) course_ids,COALESCE(a.attended_count,0) attended_count,COALESCE(a.absent_count,0) absent_count,COALESCE(a.justified_count,0) justified_count,COALESCE(a.visitor_count,0) visitor_count,(SELECT COUNT(*) FROM attendance ga JOIN events ge ON ge.id=ga.event_id WHERE ga.member_id=m.id AND ga.status IN ('presente','visitante') AND (ge.course_id=(SELECT gc.id FROM enrollments ge2 JOIN courses gc ON gc.id=ge2.course_id WHERE ge2.user_id=u.id AND gc.area='discipulado' AND gc.group_id IS NOT NULL LIMIT 1) OR ge.group_id=COALESCE(m.group_id,(SELECT gc.group_id FROM enrollments ge2 JOIN courses gc ON gc.id=ge2.course_id WHERE ge2.user_id=u.id AND gc.area='discipulado' AND gc.group_id IS NOT NULL LIMIT 1)))) group_attendance_count FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN groups_family g ON g.id=m.group_id LEFT JOIN (SELECT member_id,SUM(status IN ('presente','visitante')) attended_count,SUM(status='ausente') absent_count,SUM(status='justificado') justified_count,SUM(status='visitante') visitor_count FROM attendance GROUP BY member_id) a ON a.member_id=m.id ${roleScope} ORDER BY u.name`,args))}));
+app.get('/api/users',wrap(async(req,res)=>{allow(req.user,managers);const assignable=assignableRoles.filter(role=>role!=='administrador');const roleScope=req.user.role==='coordinador'?`WHERE u.role IN (${assignable.map(()=>'?').join(',')})`:'';const args=req.user.role==='coordinador'?assignable:[];res.json(await query(`SELECT u.id,u.name,u.email,u.role,u.active,u.birthday,u.eps,m.id member_id,m.name member_name,COALESCE(g.name,(SELECT GROUP_CONCAT(DISTINCT gf.name ORDER BY gf.name SEPARATOR ', ') FROM enrollments en JOIN courses c ON c.id=en.course_id JOIN groups_family gf ON gf.id=c.group_id WHERE en.user_id=u.id AND c.area='discipulado')) group_name,(SELECT GROUP_CONCAT(c.title ORDER BY c.title SEPARATOR ', ') FROM enrollments en JOIN courses c ON c.id=en.course_id WHERE en.user_id=u.id) course_names,(SELECT GROUP_CONCAT(en.course_id ORDER BY en.course_id) FROM enrollments en WHERE en.user_id=u.id) course_ids,COALESCE(a.attended_count,0) attended_count,COALESCE(a.absent_count,0) absent_count,COALESCE(a.justified_count,0) justified_count,COALESCE(a.visitor_count,0) visitor_count,(SELECT COUNT(*) FROM attendance ga JOIN events ge ON ge.id=ga.event_id WHERE ga.member_id=m.id AND ga.status IN ('presente','visitante') AND (ge.course_id=(SELECT gc.id FROM enrollments ge2 JOIN courses gc ON gc.id=ge2.course_id WHERE ge2.user_id=u.id AND gc.area='discipulado' AND gc.group_id IS NOT NULL LIMIT 1) OR ge.group_id=COALESCE(m.group_id,(SELECT gc.group_id FROM enrollments ge2 JOIN courses gc ON gc.id=ge2.course_id WHERE ge2.user_id=u.id AND gc.area='discipulado' AND gc.group_id IS NOT NULL LIMIT 1)))) group_attendance_count FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN groups_family g ON g.id=m.group_id LEFT JOIN (SELECT member_id,SUM(status IN ('presente','visitante')) attended_count,SUM(status='ausente') absent_count,SUM(status='justificado') justified_count,SUM(status='visitante') visitor_count FROM attendance GROUP BY member_id) a ON a.member_id=m.id ${roleScope} ORDER BY u.name`,args))}));
 app.post('/api/users',wrap(async(req,res)=>{allow(req.user,managers);const d=z.object({name:text,email:z.string().email().max(190),birthday:birthDate,eps:z.string().trim().min(1).max(100),role:z.enum(roles),course_ids:z.array(z.coerce.number().int().positive()).max(100).default([])}).parse(req.body);if(!canGrant(req.user.role,d.role))fail(403,'No puedes otorgar ese rol');const courseIds=[...new Set(d.course_ids)];const selected=courseIds.length?await query(`SELECT id,area,group_id FROM courses WHERE id IN (${courseIds.map(()=>'?').join(',')})`,courseIds):[];if(selected.length!==courseIds.length)fail(400,'Uno o m?s cursos no existen');if(selected.filter(c=>c.area==='discipulado'&&c.group_id).length>1)fail(400,'Asigna una sola comuni?n familiar por cuenta');const password=randomBytes(18).toString('base64url');const created=await query('INSERT INTO users(name,email,password_hash,role,birthday,eps) VALUES(?,?,?,?,?,?)',[d.name,d.email.toLowerCase(),await bcrypt.hash(password,12),d.role,d.birthday,d.eps]);for(const courseId of courseIds)await query('INSERT INTO enrollments(course_id,user_id) VALUES(?,?)',[courseId,created.insertId]);await query('INSERT INTO audit(user_id,action) VALUES(?,?)',[req.user.id,`Habilit? acceso ${d.role}`]);res.status(201).json({password,message:'Acceso habilitado. Entrega la contrase?a temporal por un canal privado.'})}));
 app.patch('/api/users/:id',wrap(async(req,res)=>{allow(req.user,managers);const {active}=z.object({active:z.boolean()}).parse(req.body);const [u]=await query('SELECT role FROM users WHERE id=?',[req.params.id]);if(!u)fail(404,'Usuario inexistente');if(Number(req.params.id)===req.user.id||!canGrant(req.user.role,u.role))fail(403,'No puedes modificar esta cuenta');await query('UPDATE users SET active=? WHERE id=?',[active,req.params.id]);await query('DELETE FROM sessions WHERE user_id=?',[req.params.id]);res.json({ok:true})}));
 const groupScope=u=>u.role==='discipulador';
 async function memberAccess(u,id){allow(u,personal);const [m]=await query('SELECT m.*,g.leader_id FROM members m LEFT JOIN groups_family g ON g.id=m.group_id WHERE m.id=?',[id]);if(!m)fail(404,'Miembro inexistente');if(groupScope(u)&&m.leader_id!==u.id)fail(403,'Miembro fuera de tu grupo');return m}
 app.get('/api/groups',wrap(async(req,res)=>res.json(await query(`SELECT g.*,u.name leader,(SELECT COUNT(*) FROM members m WHERE m.group_id=g.id) total FROM groups_family g LEFT JOIN users u ON u.id=g.leader_id ${groupScope(req.user)?'WHERE g.leader_id=?':''}`,groupScope(req.user)?[req.user.id]:[]))));
 app.post('/api/groups',wrap(async(req,res)=>{allow(req.user,[...pastoral,'discipulador']);const d=z.object({name:text,capacity:z.coerce.number().int().min(1).max(500),leader_id:z.coerce.number().int().positive().nullable()}).parse(req.body);if(groupScope(req.user))d.leader_id=req.user.id;await query('INSERT INTO groups_family(name,capacity,leader_id) VALUES(?,?,?)',[d.name,d.capacity,d.leader_id]);res.status(201).json({ok:true})}));
-const memberSchema=z.object({born_again:z.boolean().default(false),photo_data:photoSchema.default(''),name:text,id_type:text,identification:text,phone:text,birthday:validDate,email:z.union([z.literal(''),z.string().email()]).default(''),blood_type:optional,eps:optional,church_function:optional,campus:optional,emergency_name:optional,emergency_phone:optional,coverage:optional,group_id:z.coerce.number().int().positive().nullable(),status:z.enum(['activo','inactivo','retirado']).default('activo'),ministries:z.array(text).max(15).default([])});
+const memberSchema=z.object({born_again:z.boolean().default(false),photo_data:photoSchema.default(''),name:text,id_type:z.enum(['CC','TI','RC','CE','PA','PPT','PEP','OTRO']),identification:text,phone:text,birthday:validDate,email:z.union([z.literal(''),z.string().email()]).default(''),blood_type:optional,eps:optional,church_function:optional,campus:optional,emergency_name:optional,emergency_phone:optional,coverage:optional,group_id:z.coerce.number().int().positive().nullable(),status:z.enum(['activo','inactivo','retirado']).default('activo'),ministries:z.array(text).max(15).default([])});
 async function members(u){allow(u,personal);return query(`SELECT m.*,TIMESTAMPDIFF(YEAR,m.birthday,CURDATE()) age,g.name group_name FROM members m LEFT JOIN groups_family g ON g.id=m.group_id ${groupScope(u)?'WHERE g.leader_id=?':''} ORDER BY m.name`,groupScope(u)?[u.id]:[])}
 app.get('/api/members',wrap(async(req,res)=>res.json(await members(req.user))));
 app.post('/api/members',wrap(async(req,res)=>{allow(req.user,personal);const d=memberSchema.parse(req.body);if(groupScope(req.user)){const [g]=await query('SELECT id FROM groups_family WHERE id=? AND leader_id=?',[d.group_id,req.user.id]);if(!g||d.status!=='activo')fail(403,'Selecciona uno de tus grupos');}const {ministries,...record}=d;const result=await query(`INSERT INTO members(${Object.keys(record).join(',')}) VALUES(${Object.keys(record).map(()=>'?').join(',')})`,Object.values(record));if(d.group_id)await query('INSERT IGNORE INTO course_members(course_id,member_id) SELECT id,? FROM courses WHERE area=\'discipulado\' AND group_id=?',[result.insertId,d.group_id]);for(const name of ministries){await query('INSERT IGNORE INTO ministries(name) VALUES(?)',[name]);await query('INSERT INTO member_ministries SELECT ?,id FROM ministries WHERE name=?',[result.insertId,name]);}res.status(201).json({ok:true})}));
@@ -156,35 +234,48 @@ app.get('/api/members/:id/dashboard',wrap(async(req,res)=>{
  res.json({member:profile,courses});
 }));
 app.delete('/api/members/:id',wrap(async(req,res)=>{allow(req.user,pastoral);await query('UPDATE members SET status=\'retirado\' WHERE id=?',[req.params.id]);res.json({ok:true})}));
-app.get('/api/courses',wrap(async(req,res)=>{const staff=[...academic,'discipulador'].includes(req.user.role);res.json(await query(`SELECT c.*,u.name teacher,(SELECT COUNT(*) FROM course_members e WHERE e.course_id=c.id) enrolled FROM courses c LEFT JOIN users u ON u.id=c.teacher_id ${staff?(['docente','discipulador'].includes(req.user.role)?'WHERE c.teacher_id=?':''):'WHERE EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id=c.id AND e.user_id=?)'} ORDER BY c.id`,(!staff||['docente','discipulador'].includes(req.user.role))?[req.user.id]:[]))}));
-async function courseAccess(u,id,edit=false){const [c]=await query('SELECT * FROM courses WHERE id=?',[id]);if(!c)fail(404,'Curso inexistente');if([...academic,'discipulador'].includes(u.role)&&(!['docente','discipulador'].includes(u.role)||c.teacher_id===u.id))return c;if(!edit){const [e]=await query('SELECT user_id FROM enrollments WHERE course_id=? AND user_id=?',[id,u.id]);if(e)return c;}fail(403,'Curso no asignado a tu cuenta')}
+app.get('/api/courses',wrap(async(req,res)=>{
+ const role=req.user.role,staff=[...academic,'discipulador'].includes(role);
+ let filter='',params=[];
+ if(role==='discipulador'){
+  filter="WHERE ((c.teacher_id=? AND (c.group_id IS NULL OR EXISTS(SELECT 1 FROM groups_family g WHERE g.id=c.group_id AND g.leader_id=?))) OR (c.area<>'discipulado' AND EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id=c.id AND e.user_id=?)))";
+  params=[req.user.id,req.user.id,req.user.id];
+ }else if(staff&&role==='docente'){
+  filter='WHERE c.teacher_id=?';params=[req.user.id];
+ }else if(!staff){
+  filter='WHERE EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id=c.id AND e.user_id=?)';params=[req.user.id];
+ }
+ res.json(await query(`SELECT c.*,u.name teacher,(SELECT COUNT(*) FROM course_members e WHERE e.course_id=c.id) enrolled FROM courses c LEFT JOIN users u ON u.id=c.teacher_id ${filter} ORDER BY c.id`,params));
+}));
+async function courseAccess(u,id,edit=false){
+ const [c]=await query('SELECT * FROM courses WHERE id=?',[id]);
+ if(!c)fail(404,'Curso inexistente');
+ if(u.role==='discipulador'){
+  if(c.teacher_id===u.id&&(!c.group_id||await query('SELECT id FROM groups_family WHERE id=? AND leader_id=?',[c.group_id,u.id]).then(rows=>rows.length>0)))return c;
+  fail(403,'Curso fuera de tu grupo');
+ }
+ if(academic.includes(u.role)&&(!['docente'].includes(u.role)||c.teacher_id===u.id))return c;
+ if(!edit){const [e]=await query('SELECT user_id FROM enrollments WHERE course_id=? AND user_id=?',[id,u.id]);if(e)return c;}
+ fail(403,'Curso no asignado a tu cuenta');
+}
 app.post('/api/courses',wrap(async(req,res)=>{allow(req.user,academic);const d=z.object({title:text,area:z.enum(['adiestramiento','discipulado']),description:optional,book:z.string().trim().max(200).default(''),teacher_id:z.coerce.number().int().positive()}).parse(req.body);if(req.user.role==='docente')d.teacher_id=req.user.id;const [teacher]=await query("SELECT id FROM users WHERE id=? AND role IN ('docente','discipulador') AND active=TRUE",[d.teacher_id]);if(!teacher)fail(400,'Selecciona un docente habilitado');let group=null;if(d.area==='discipulado'){const g=await query('INSERT INTO groups_family(name,leader_id) VALUES(?,?)',[d.title,d.teacher_id]);group=g.insertId;}await query('INSERT INTO courses(title,area,description,book,teacher_id,group_id) VALUES(?,?,?,?,?,?)',[d.title,d.area,d.description,d.book,d.teacher_id,group]);res.status(201).json({ok:true})}));
 app.get('/api/courses/:id/lessons',wrap(async(req,res)=>{await courseAccess(req.user,req.params.id);res.json(await query('SELECT * FROM lessons WHERE course_id=?',[req.params.id]))}));
 app.post('/api/courses/:id/lessons',wrap(async(req,res)=>{await courseAccess(req.user,req.params.id,true);const d=z.object({title:text,body:z.string().max(20000),url}).parse(req.body);await query('INSERT INTO lessons(course_id,title,body,url) VALUES(?,?,?,?)',[req.params.id,d.title,d.body,d.url]);res.status(201).json({ok:true})}));
 app.post('/api/courses/:id/enroll',wrap(async(req,res)=>{allow(req.user,managers);await courseAccess(req.user,req.params.id,true);const {email}=z.object({email:z.string().email()}).parse(req.body);const [u]=await query('SELECT id FROM users WHERE email=? AND active=TRUE',[email]);if(!u)fail(404,'Primero habilita el correo en Accesos');await query('INSERT IGNORE INTO enrollments VALUES(?,?)',[req.params.id,u.id]);res.json({ok:true})}));
-app.get('/api/attendance/:event',wrap(async(req,res,next)=>{
- if(!attendanceRoles.includes(req.user.role))return next();
- const [e]=await query('SELECT id FROM events WHERE id=?',[req.params.event]);
- if(!e)fail(404,'Evento inexistente');
- res.json(await query("SELECT m.id,m.name,m.identification,a.status FROM members m LEFT JOIN attendance a ON a.member_id=m.id AND a.event_id=? WHERE m.status='activo' ORDER BY m.name",[e.id]));
-}));
-app.post('/api/attendance/:event',wrap(async(req,res,next)=>{
- if(!attendanceRoles.includes(req.user.role))return next();
- const [e]=await query('SELECT * FROM events WHERE id=?',[req.params.event]);
- if(!e)fail(404,'Evento inexistente');
- if(e.status==='cancelado')fail(400,'Evento cancelado');
- const d=z.object({member_id:z.number().int().positive(),status:z.enum(['presente','ausente','justificado','visitante'])}).parse(req.body);
- const [m]=await query("SELECT id FROM members WHERE id=? AND status='activo'",[d.member_id]);
- if(!m)fail(403,'Miembro fuera del alcance de la lista');
- const [old]=await query('SELECT status FROM attendance WHERE event_id=? AND member_id=?',[e.id,d.member_id]);
- if(old)allow(req.user,pastoral);
- if(old)await query('UPDATE attendance SET status=?,recorded_by=? WHERE event_id=? AND member_id=?',[d.status,req.user.id,e.id,d.member_id]);
- else await query('INSERT INTO attendance VALUES(?,?,?,?,NOW())',[e.id,d.member_id,d.status,req.user.id]);
- res.json({ok:true});
-}));
 app.get('/api/events',wrap(async(req,res)=>{
- const events=await query('SELECT * FROM events ORDER BY event_date DESC');
- res.json(events.map(({checkin_token_hash,...event})=>event));
+ const [canSeeEvents,canSeeServices,canAttend]=await Promise.all([
+  moduleAllowed(req.user,'Eventos','puede_ver'),
+  moduleAllowed(req.user,'Servicios','puede_ver'),
+  moduleAllowed(req.user,'Asistencia','puede_ver')
+ ]);
+ if(!canSeeEvents&&!canSeeServices&&!canAttend)fail(403,'No tienes permiso para consultar eventos');
+ const events=groupScope(req.user)?await query(`SELECT e.* FROM events e
+  LEFT JOIN groups_family g ON g.id=e.group_id
+  LEFT JOIN courses c ON c.id=e.course_id
+  WHERE (e.group_id IS NULL OR g.leader_id=?)
+   AND (c.group_id IS NULL OR EXISTS(SELECT 1 FROM groups_family cg WHERE cg.id=c.group_id AND cg.leader_id=?))
+  ORDER BY e.event_date DESC`,[req.user.id,req.user.id]):await query('SELECT * FROM events ORDER BY event_date DESC');
+ res.json(events.filter(event=>canAttend||(event.kind==='servicio'?canSeeServices:canSeeEvents)).map(({checkin_token_hash,...event})=>event));
 }));
 const eventSchema=z.object({title:text,kind:z.enum(['servicio','especial','grupo','adiestramiento','discipulado']),event_date:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).refine(s=>!isNaN(Date.parse(s))),location:optional,image_url:url,description:optional,registration:z.boolean().default(false),group_id:z.coerce.number().int().positive().nullable().default(null),course_id:z.coerce.number().int().positive().nullable().default(null)});
 app.post('/api/events',wrap(async(req,res)=>{allow(req.user,[...academic,'discipulador','multimedia']);const d=eventSchema.parse(req.body);if(d.course_id){const c=await courseAccess(req.user,d.course_id,true);d.group_id=c.group_id;d.kind=c.area;}else if(['docente','discipulador'].includes(req.user.role))fail(403,'Selecciona un curso a tu cargo');const created=await query('INSERT INTO events(title,kind,event_date,location,image_url,description,registration,group_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)',Object.values(d));res.status(201).json({ok:true,id:created.insertId})}));
@@ -236,7 +327,7 @@ app.post('/api/check-in/:event/:token',wrap(async(req,res)=>{
 app.get('/api/attendance/:event',wrap(async(req,res)=>{allow(req.user,[...academic,'asistencia_pastoral','discipulador']);const e=await eventAccess(req.user,req.params.event);res.json(await query(`SELECT m.id,m.name,m.identification,a.status FROM members m LEFT JOIN attendance a ON a.member_id=m.id AND a.event_id=? LEFT JOIN groups_family g ON g.id=m.group_id WHERE m.status='activo' ${e.course_id?'AND m.id IN(SELECT member_id FROM course_members WHERE course_id=?)':e.group_id?'AND m.group_id=?':''} ${groupScope(req.user)?'AND g.leader_id=?':''} ORDER BY m.name`,[e.id,...(e.course_id?[e.course_id]:e.group_id?[e.group_id]:[]),...(groupScope(req.user)?[req.user.id]:[])]))}));
 app.post('/api/attendance/:event',wrap(async(req,res)=>{allow(req.user,[...academic,'asistencia_pastoral','discipulador']);const e=await eventAccess(req.user,req.params.event);if(e.status==='cancelado')fail(400,'Evento cancelado');const d=z.object({member_id:z.number().int().positive(),status:z.enum(['presente','ausente','justificado','visitante'])}).parse(req.body);const [m]=await query('SELECT m.group_id,g.leader_id FROM members m LEFT JOIN groups_family g ON g.id=m.group_id WHERE m.id=? AND m.status=\'activo\'',[d.member_id]);if(!m||(e.group_id&&m.group_id!==e.group_id)||(groupScope(req.user)&&m.leader_id!==req.user.id))fail(403,'Miembro fuera del alcance de la lista');if(e.course_id){const [enrolled]=await query('SELECT member_id FROM course_members WHERE course_id=? AND member_id=?',[e.course_id,d.member_id]);if(!enrolled)fail(403,'Alumno no inscrito');}const [old]=await query('SELECT status FROM attendance WHERE event_id=? AND member_id=?',[e.id,d.member_id]);if(old)allow(req.user,pastoral);if(old)await query('UPDATE attendance SET status=?,recorded_by=? WHERE event_id=? AND member_id=?',[d.status,req.user.id,e.id,d.member_id]);else await query('INSERT INTO attendance VALUES(?,?,?,?,NOW())',[e.id,d.member_id,d.status,req.user.id]);res.json({ok:true})}));
 tracking(app,wrap,allow,fail);
-app.get('/api/stats',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);const [counts]=await query("SELECT (SELECT COUNT(*) FROM members WHERE status='activo') members,(SELECT COUNT(*) FROM groups_family) groups,(SELECT COUNT(*) FROM courses) courses,(SELECT COUNT(*) FROM events WHERE status='programado') events");let alerts=[];if(pastoral.includes(req.user.role))alerts=await query("SELECT m.id,m.name FROM members m JOIN attendance a ON a.member_id=m.id JOIN events e ON e.id=a.event_id WHERE m.status='activo' AND e.status<>'cancelado' AND e.event_date<=NOW() AND a.status='ausente' AND (SELECT COUNT(*) FROM attendance a2 JOIN events e2 ON e2.id=a2.event_id WHERE a2.member_id=m.id AND e2.status<>'cancelado' AND e2.event_date<=NOW() AND (e2.event_date>e.event_date OR (e2.event_date=e.event_date AND e2.id>e.id)))<2 GROUP BY m.id,m.name HAVING COUNT(*)=2");res.json({...counts,alerts})}));
+app.get('/api/stats',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);const [counts]=await query("SELECT (SELECT COUNT(*) FROM members WHERE status='activo') members,(SELECT COUNT(*) FROM groups_family) `groups`,(SELECT COUNT(*) FROM courses) courses,(SELECT COUNT(*) FROM events WHERE status='programado') events");let alerts=[];if(pastoral.includes(req.user.role))alerts=await query("SELECT m.id,m.name FROM members m JOIN attendance a ON a.member_id=m.id JOIN events e ON e.id=a.event_id WHERE m.status='activo' AND e.status<>'cancelado' AND e.event_date<=NOW() AND a.status='ausente' AND (SELECT COUNT(*) FROM attendance a2 JOIN events e2 ON e2.id=a2.event_id WHERE a2.member_id=m.id AND e2.status<>'cancelado' AND e2.event_date<=NOW() AND (e2.event_date>e.event_date OR (e2.event_date=e.event_date AND e2.id>e.id)))<2 GROUP BY m.id,m.name HAVING COUNT(*)=2");res.json({...counts,alerts})}));
 app.get('/api/reports/:type/:format',wrap(async(req,res)=>{allow(req.user,[...pastoral,'multimedia']);const type=z.enum(['asistencia','cumpleanos','grupos']).parse(req.params.type),format=z.enum(['xlsx','pdf']).parse(req.params.format);if(type==='cumpleanos')allow(req.user,pastoral);let rows;if(type==='asistencia'){const filters=z.object({date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),course_id:z.coerce.number().int().positive().optional()}).parse(req.query);const clauses=["e.status<>'cancelado'",'e.event_date<=NOW()'];const params=[];if(filters.date){clauses.push('DATE(e.event_date)=?');params.push(filters.date)}if(filters.course_id){clauses.push('c.id=?');params.push(filters.course_id)}rows=await query(`SELECT DATE_FORMAT(e.event_date,'%Y-%m-%d %H:%i') Fecha,c.title Clase,e.title Sesion,m.name Usuario,COALESCE(a.status,'sin_registro') Estado FROM events e JOIN courses c ON c.id=e.course_id JOIN course_members cm ON cm.course_id=c.id JOIN members m ON m.id=cm.member_id AND m.status='activo' LEFT JOIN attendance a ON a.event_id=e.id AND a.member_id=m.id WHERE ${clauses.join(' AND ')} ORDER BY e.event_date DESC,c.title,m.name`,params)}else rows=await query(type==='cumpleanos'?'SELECT name Nombre,birthday Cumpleanos FROM members WHERE status=\'activo\' ORDER BY MONTH(birthday),DAY(birthday)':'SELECT g.name Grupo,COUNT(m.id) Integrantes FROM groups_family g LEFT JOIN members m ON m.group_id=g.id GROUP BY g.id,g.name');res.attachment(`arca-${type}.${format}`);if(format==='xlsx'){const w=new ExcelJS.Workbook(),s=w.addWorksheet(type);if(rows.length){s.columns=Object.keys(rows[0]).map(k=>({header:k,key:k,width:28}));s.addRows(rows);}else s.addRow(['Sin registros']);await w.xlsx.write(res);res.end()}else{const doc=new PDFDocument({margin:45});res.type('pdf');doc.pipe(res);doc.fontSize(20).text('ARCA · '+type);doc.moveDown();doc.fontSize(10);for(const row of rows){doc.text(Object.entries(row).map(([k,v])=>`${k}: ${v??''}`).join(' | '));doc.moveDown()}if(!rows.length)doc.text('Sin registros');doc.end()}}));
 app.use('/api',(req,res)=>res.status(404).json({error:'Ruta inexistente'}));
 if(process.env.VERCEL!=='1'){

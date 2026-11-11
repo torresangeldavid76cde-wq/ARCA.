@@ -8,3 +8,7 @@ node_modules
 dist
 tests
 *.log
+*.pem
+*.key
+*.p12
+*.pfx

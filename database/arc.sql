@@ -290,6 +290,8 @@ CREATE TABLE IF NOT EXISTS `roles` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
   -- Nombre del rol o módulo.
   `nombre` varchar(40) NOT NULL,
+  -- Nombre que se muestra en la interfaz; nombre conserva la clave interna.
+  `nombre_visible` varchar(80) NOT NULL DEFAULT '',
   -- Descripción del rol.
   `descripcion` varchar(160) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
@@ -320,6 +322,8 @@ CREATE TABLE IF NOT EXISTS `permisos_rol` (
   `puede_editar` tinyint(1) NOT NULL DEFAULT 0,
   -- Permiso para eliminar registros: 1 = permitido, 0 = no permitido.
   `puede_eliminar` tinyint(1) NOT NULL DEFAULT 0,
+  -- Indica si el administrador activó esta matriz para el rol.
+  `aplicado` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`rol_id`,`modulo_id`),
   KEY `modulo_id` (`modulo_id`),
   CONSTRAINT `permisos_rol_ibfk_1` FOREIGN KEY (`rol_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE,
