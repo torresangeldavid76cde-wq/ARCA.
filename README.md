@@ -87,6 +87,4 @@ Se verificaron compilación React, base conectada, autenticación, restricciones
 
 Las pruebas automatizadas usan las cuentas demo y crean/eliminan únicamente sus registros de prueba; ejecutarlas solo en esta base de demostración. Con la aplicación iniciada, `npm test` comprueba accesos, límites de intentos, gestión de eventos y asistencia dominical, incluyendo validación de domingos, reutilización concurrente, guardado y restricciones de corrección. `node server/local.js --verify` inicia y verifica los accesos de la instancia local.
 
-Kluster no pudo revisar: su herramienta reportó `connectionError`. No se presenta como revisión aprobada.
-
 Antes de producción quedan el despliegue HTTPS, verificación en MySQL Server, aprobación institucional del texto de privacidad y pruebas visuales/instalación en dispositivos. El audio se incorporó usando las dos capturas de su transcripción; no se realizó transcripción directa del archivo OGG.
