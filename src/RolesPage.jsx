@@ -1,4 +1,5 @@
 import React,{useState as S} from 'react';
+import {availableRoleBases} from './role-options.js';
 
 const permissionFields=[
  ['puede_ver','Ver'],
@@ -46,9 +47,9 @@ export function RolesPage({roles,modules,busy,api,run,onRoleSaved}){
    <label>Descripción<input name="descripcion" maxLength="160" disabled={busy}/></label>
    <label>Rol base<select name="base_id" defaultValue="" required disabled={busy}>
     <option value="" disabled>Selecciona un rol base</option>
-    {roles.filter(item=>item.nombre!=='administrador').map(item=><option key={item.id} value={item.id}>{item.nombre_visible||item.nombre}</option>)}
+    {availableRoleBases(roles).map(item=><option key={item.id} value={item.id}>{item.nombre_visible||item.nombre}</option>)}
    </select></label>
-   <p className="muted">Se copian los permisos del rol base. Luego puedes ajustarlos dentro de su alcance. Administrador no se puede usar como base.</p>
+   <p className="muted">Se copian los permisos del rol base. Luego puedes ajustarlos dentro de su alcance.</p>
    <button className="primary" disabled={busy}>Crear rol y ajustar permisos</button>
   </form>}
   {['editar','eliminar'].includes(action)&&<>
