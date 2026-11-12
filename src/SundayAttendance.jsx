@@ -1,9 +1,10 @@
 import React,{useEffect,useState} from 'react';
 
 const correctionRoles=['administrador','pastor','asistencia_pastoral'];
+const attendanceStatuses=['presente','ausente','justificado','visitante'];
 
 export function AttendanceRoster({rows,user,busy,cancelled,onMark}){
- return <><div className="toolbar"><span>{rows.filter(r=>r.status).length} de {rows.length} registros guardados</span></div><div className="table-scroll"><table><thead><tr><th>Discípulo</th><th>Estado</th><th>Registrar</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.status||'Sin registrar'}</td><td><select aria-label={'Asistencia de '+r.name} value={r.status||''} disabled={busy||cancelled||(Boolean(r.status)&&!correctionRoles.includes(user.role))} onChange={e=>onMark(r.id,e.target.value)}><option value="" disabled>Seleccionar</option>{['presente','ausente','justificado','visitante'].map(status=><option key={status} value={status}>{status}</option>)}</select></td></tr>)}</tbody></table></div>{!rows.length&&<p className="muted">No hay discípulos que coincidan con esta lista.</p>}<p className="muted">{cancelled?'Este encuentro está cancelado; no se puede registrar asistencia.':'Cada registro se guarda al seleccionarlo. Sin registrar no equivale a ausente.'}</p></>;
+ return <><div className="toolbar"><span>{rows.filter(r=>r.status).length} de {rows.length} registros guardados</span></div><div className="table-scroll"><table><thead><tr><th>Discípulo</th><th>Estado</th><th>Registrar</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.status||'Sin registrar'}</td><td><div className="attendance-options" role="group" aria-label={'Asistencia de '+r.name}>{attendanceStatuses.map(status=><button type="button" key={status} aria-label={`${status} para ${r.name}`} aria-pressed={r.status===status} disabled={busy||cancelled||status===r.status||(Boolean(r.status)&&!correctionRoles.includes(user.role))} onClick={()=>onMark(r.id,status)}>{status}</button>)}</div></td></tr>)}</tbody></table></div>{!rows.length&&<p className="muted">No hay discípulos que coincidan con esta lista.</p>}<p className="muted">{cancelled?'Este encuentro está cancelado; no se puede registrar asistencia.':'Cada registro se guarda al seleccionarlo. Sin registrar no equivale a ausente.'}</p></>;
 }
 
 function nextSunday(){
