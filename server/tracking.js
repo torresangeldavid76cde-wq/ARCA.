@@ -22,7 +22,7 @@ export function tracking(app,wrap,allow,fail){
    GROUP BY DATE_FORMAT(e.event_date,'%Y-%m') ORDER BY month`,scoped?[req.user.id]:[]);
   res.json({...counts,courses,alerts,consecutive,attendance});
  }));
- app.get('/api/teachers',wrap(async(req,res)=>{allow(req.user,[...academic,'discipulador',...pastoral]);res.json(await query("SELECT id,name,role FROM users WHERE active=TRUE AND role IN ('docente','discipulador') ORDER BY name"))}));
+ app.get('/api/teachers',wrap(async(req,res)=>{allow(req.user,[...academic,'discipulador',...pastoral]);res.json(await query("SELECT u.id,u.name,COALESCE(r.base_role,u.role) role FROM users u LEFT JOIN roles r ON r.nombre=u.role WHERE u.active=TRUE AND COALESCE(r.base_role,u.role) IN ('docente','discipulador') ORDER BY u.name"))}));
  app.get('/api/courses/:id/members',wrap(async(req,res)=>{
   const [c]=await query('SELECT * FROM courses WHERE id=?',[req.params.id]);if(!c)fail(404,'Curso inexistente');allow(req.user,[...academic,'discipulador',...pastoral]);if(['docente','discipulador'].includes(req.user.role)&&c.teacher_id!==req.user.id)fail(403,'Curso no asignado');
   res.json(await query(`SELECT m.id,m.name,g.name group_name,EXISTS(SELECT 1 FROM course_members cm WHERE cm.course_id=? AND cm.member_id=m.id) enrolled,(SELECT COUNT(*) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.member_id=m.id AND e.course_id=? AND a.status IN ('presente','visitante')) attended,(SELECT COUNT(*) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.member_id=m.id AND e.course_id=? AND a.status='ausente') absent,(SELECT COUNT(*) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.member_id=m.id AND e.course_id=? AND a.status='justificado') justified FROM members m LEFT JOIN groups_family g ON g.id=m.group_id WHERE m.status<>'retirado' ORDER BY m.name`,[c.id,c.id,c.id,c.id]));
@@ -36,7 +36,7 @@ export function tracking(app,wrap,allow,fail){
  }));
  app.patch('/api/courses/:id',wrap(async(req,res)=>{
   allow(req.user,managers);const d=z.object({title:z.string().trim().min(1).max(160),book:z.string().trim().max(200),teacher_id:z.number().int().positive()}).parse(req.body);
-  const [teacher]=await query("SELECT id FROM users WHERE id=? AND role IN ('docente','discipulador') AND active=TRUE",[d.teacher_id]);if(!teacher)fail(400,'Selecciona un docente habilitado');
+  const [teacher]=await query("SELECT u.id FROM users u LEFT JOIN roles r ON r.nombre=u.role WHERE u.id=? AND COALESCE(r.base_role,u.role) IN ('docente','discipulador') AND u.active=TRUE",[d.teacher_id]);if(!teacher)fail(400,'Selecciona un docente habilitado');
   await query('UPDATE courses SET title=?,book=?,teacher_id=? WHERE id=?',[d.title,d.book,d.teacher_id,req.params.id]);await query('UPDATE groups_family SET leader_id=? WHERE id=(SELECT group_id FROM courses WHERE id=?)',[d.teacher_id,req.params.id]);res.json({ok:true});
  }));
  app.get('/api/members/:id/history',wrap(async(req,res)=>{

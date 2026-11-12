@@ -292,6 +292,7 @@ CREATE TABLE IF NOT EXISTS `roles` (
   `nombre` varchar(40) NOT NULL,
   -- Nombre que se muestra en la interfaz; nombre conserva la clave interna.
   `nombre_visible` varchar(80) NOT NULL DEFAULT '',
+  `base_role` varchar(40) DEFAULT NULL,
   -- Descripción del rol.
   `descripcion` varchar(160) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),

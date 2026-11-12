@@ -73,6 +73,78 @@ test('el módulo de roles administra el catálogo y conserva asignación compati
  }
 });
 
+test('crear, ajustar, asignar y eliminar roles conserva la base y protege cuentas existentes',async()=>{
+ const admin=await login('administrador'),guest=await login('estudiante');
+ let roleId,copyId,fixtureUser,session;
+ try{
+  const catalog=(await call('/admin/roles','GET',null,admin)).body;
+  const baseRole=catalog.roles.find(role=>role.nombre==='docente');
+  const administrator=catalog.roles.find(role=>role.nombre==='administrador');
+  const payload={nombre_visible:'Equipo '+randomUUID(),descripcion:'Rol de prueba',base_id:baseRole.id};
+  assert.equal((await call('/admin/roles','POST',payload)).status,401);
+  assert.equal((await call('/admin/roles','POST',payload,guest)).status,403);
+  assert.equal((await call('/admin/roles','POST',{...payload,nombre_visible:' '},admin)).status,400);
+  assert.equal((await call('/admin/roles','POST',{...payload,base_id:administrator.id},admin)).status,400);
+  assert.equal((await call('/admin/roles','POST',{...payload,base_id:4294967295},admin)).status,404);
+  const created=await call('/admin/roles','POST',payload,admin);
+  assert.equal(created.status,201);
+  roleId=created.body.id;
+  const role=(await call('/admin/roles','GET',null,admin)).body.roles.find(item=>item.id===roleId);
+  assert.equal(role.nombre_visible,payload.nombre_visible);
+  assert.equal(role.base_role,'docente');
+  const normalize=items=>items.map(({modulo_id,puede_ver,puede_crear,puede_editar,puede_eliminar,aplicado})=>({modulo_id,puede_ver,puede_crear,puede_editar,puede_eliminar,aplicado}));
+  assert.deepEqual(normalize(role.permisos),normalize(baseRole.permisos));
+  const update={nombre_visible:'Docencia personalizada',descripcion:'Permisos ajustados',aplicar_permisos:true,permisos:role.permisos.map(item=>({modulo_id:Number(item.modulo_id),puede_ver:item.modulo!=='Eventos',puede_crear:false,puede_editar:false,puede_eliminar:false}))};
+  assert.equal((await call('/admin/roles/'+roleId,'PUT',update,admin)).status,200);
+  const updated=(await call('/admin/roles','GET',null,admin)).body.roles.find(item=>item.id===roleId);
+  assert.equal(updated.nombre,role.nombre);
+  assert.equal(updated.base_role,'docente');
+  assert.equal(Number(updated.permisos.find(item=>item.modulo==='Eventos').puede_ver),0);
+  const copied=await call('/admin/roles','POST',{...payload,base_id:roleId},admin);
+  assert.equal(copied.status,201);copyId=copied.body.id;
+  const copy=(await call('/admin/roles','GET',null,admin)).body.roles.find(item=>item.id===copyId);
+  assert.equal(copy.base_role,'docente');
+  assert.deepEqual(normalize(copy.permisos),normalize(updated.permisos));
+
+  const email=`custom.${randomUUID()}@arca.demo`,password='Custom-role-test-2026!';
+  const user=await query("INSERT INTO users(name,email,password_hash,role,active,must_change,estado) VALUES('Docente de prueba',?,?,'estudiante',TRUE,FALSE,'activa')",[email,await bcrypt.hash(password,12)]);
+  fixtureUser=user.insertId;
+  assert.equal((await call('/admin/usuarios/'+fixtureUser+'/rol','PUT',{role:role.nombre},admin)).status,200);
+  const signed=await call('/login','POST',{email,password,terms:true});assert.equal(signed.status,200);session=signed.cookie;
+  const me=(await call('/me','GET',null,session)).body;
+  assert.equal(me.role,'docente');
+  assert.equal(me.assigned_role,role.nombre);
+  assert.equal(Number(me.module_permissions.find(item=>item.modulo==='Eventos').puede_ver),0);
+  assert.equal((await call('/courses','GET',null,session)).status,200);
+  assert.equal((await call('/members','GET',null,session)).status,403);
+  assert.equal((await call('/admin/roles','GET',null,session)).status,403);
+  assert.ok((await call('/teachers','GET',null,admin)).body.some(item=>item.id===fixtureUser));
+  assert.equal((await call('/admin/roles/'+roleId,'DELETE',null,guest)).status,403);
+  assert.equal((await call('/admin/roles/'+roleId,'DELETE',null,admin)).status,409);
+  await query("UPDATE users SET estado='suspendida' WHERE id=?",[fixtureUser]);
+  assert.equal((await call('/admin/roles/'+roleId,'DELETE',null,admin)).status,409);
+  assert.equal((await call('/admin/roles/'+administrator.id,'DELETE',null,admin)).status,400);
+  assert.equal((await call('/admin/usuarios/'+fixtureUser+'/rol','PUT',{role:'estudiante'},admin)).status,200);
+  assert.equal((await call('/admin/roles/'+roleId,'DELETE',null,admin)).status,200);
+  assert.equal((await call('/admin/roles/'+roleId,'DELETE',null,admin)).status,404);
+  assert.equal((await call('/admin/usuarios/'+fixtureUser+'/rol','PUT',{role:role.nombre},admin)).status,400);
+  assert.ok(!(await call('/roles','GET',null,admin)).body.some(item=>item.nombre===role.nombre));
+  assert.equal((await query('SELECT * FROM permisos_rol WHERE rol_id=?',[roleId])).length,0);
+  const audit=await query("SELECT detalle FROM auditoria_permisos WHERE accion='roles' AND detalle LIKE ?",['%'+role.nombre+'%']);
+  assert.ok(audit.some(item=>item.detalle.startsWith('Creación')));
+  assert.ok(audit.some(item=>item.detalle.startsWith('Eliminación')));
+ }finally{
+  if(fixtureUser){
+   await query('DELETE FROM sessions WHERE user_id=?',[fixtureUser]);
+   await query('DELETE FROM audit WHERE user_id=?',[fixtureUser]);
+   await query('DELETE FROM users WHERE id=?',[fixtureUser]);
+  }
+  for(const id of [copyId,roleId].filter(Boolean))await query('DELETE FROM roles WHERE id=?',[id]);
+  await call('/logout','POST',null,admin);
+  await call('/logout','POST',null,guest);
+ }
+});
+
 test('el discipulador solo puede listar y agregar discípulos en grupos propios',async()=>{
  const suffix=randomUUID(),leaderEmail=`leader.${suffix}@arca.demo`,otherEmail=`other.${suffix}@arca.demo`,password='Group-test-password-2026!';
  const leader=await query("INSERT INTO users(name,email,password_hash,role,active,must_change,estado) VALUES('Líder de prueba',?,?, 'discipulador',TRUE,FALSE,'activa')",[leaderEmail,await bcrypt.hash(password,12)]);

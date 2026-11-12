@@ -7,34 +7,63 @@ const permissionFields=[
  ['puede_eliminar','Eliminar']
 ];
 
-export function RolesPage({roles,modules,users,busy,roleLabels,currentUserId,api,run,onRoleSaved,onUserRoleSaved}){
- const assignmentRows=users.map(person=>{
-  const options=roles.map(role=>[role.nombre,roleLabels[role.nombre]||role.nombre]);
-  return [person.name,person.email,person.estado,roleLabels[person.role]||person.role,
-   <RoleAssignment key={person.id+':'+person.role} person={person} roles={options} disabled={busy||person.id===currentUserId} onSave={role=>onUserRoleSaved(person,role)}/>];
- });
- return <>
-  <section className="panel">
-   <div className="section-title"><h2>Asignar roles a personas</h2></div>
-   <p className="muted">Cambia el rol de una cuenta existente. No puedes cambiar tu propio rol ni dejar la aplicación sin un administrador activo.</p>
-   <Table heads={['Nombre','Correo','Estado','Rol actual','Nuevo rol']} rows={assignmentRows}/>
-  </section>
-  <section className="panel">
-   <div className="section-title"><h2>Definiciones y permisos</h2></div>
-   <p className="muted">Edita el nombre visible, la descripción y la matriz de permisos. La clave interna de cada rol no se modifica.</p>
-   <div className="role-grid">{roles.map(role=><RoleDefinition key={role.id} role={role} modules={modules} api={api} run={run} busy={busy} onSaved={onRoleSaved}/>)}</div>
-  </section>
- </>;
-}
-
-function RoleAssignment({person,roles,disabled,onSave}){
- const [role,Role]=S(person.role);
- return <form className="actions" onSubmit={event=>{event.preventDefault();onSave(role)}}>
-  <select aria-label={'Nuevo rol de '+person.email} value={role} disabled={disabled} onChange={event=>Role(event.target.value)}>
-   {roles.map(([value,label])=><option key={value} value={value}>{label}</option>)}
-  </select>
-  <button className="primary" disabled={disabled||role===person.role} aria-label={'Guardar rol de '+person.email}>Guardar rol</button>
- </form>;
+export function RolesPage({roles,modules,busy,api,run,onRoleSaved}){
+ const [action,Action]=S(''),[selected,Selected]=S(''),[notice,Notice]=S('');
+ const role=roles.find(item=>String(item.id)===selected);
+ const saved=async()=>{await onRoleSaved();Notice('Rol actualizado correctamente.')};
+ const create=event=>{
+  event.preventDefault();
+  const data=new FormData(event.currentTarget);
+  run(async()=>{
+   const result=await api('/admin/roles','POST',{
+    nombre_visible:String(data.get('nombre_visible')).trim(),
+    descripcion:String(data.get('descripcion')).trim(),
+    base_id:Number(data.get('base_id'))
+   });
+   await onRoleSaved();
+   Selected(String(result.id));Action('editar');
+   Notice('Rol creado. Ahora puedes ajustar sus permisos.');
+  });
+ };
+ const remove=event=>{
+  event.preventDefault();
+  if(!window.confirm('¿Eliminar el rol '+(role.nombre_visible||role.nombre)+'? Esta acción no se puede deshacer.'))return;
+  run(async()=>{
+   await api('/admin/roles/'+role.id,'DELETE');
+   await onRoleSaved();
+   Selected('');Notice('Rol eliminado correctamente.');
+  });
+ };
+ return <section className="panel">
+  <div className="section-title"><h2>Gestionar roles</h2></div>
+  <div className="actions">{[['crear','Crear rol'],['editar','Editar rol'],['eliminar','Eliminar rol']].map(([value,label])=>
+   <button key={value} type="button" className={action===value?'primary':''} aria-pressed={action===value} disabled={busy} onClick={()=>{Action(value);Selected('');Notice('')}}>{label}</button>
+  )}</div>
+  {notice&&<p role="status" className="success">{notice}</p>}
+  {action==='crear'&&<form className="role-card" onSubmit={create}>
+   <h3>Crear rol</h3>
+   <label>Nombre visible<input name="nombre_visible" maxLength="80" required disabled={busy}/></label>
+   <label>Descripción<input name="descripcion" maxLength="160" disabled={busy}/></label>
+   <label>Rol base<select name="base_id" defaultValue="" required disabled={busy}>
+    <option value="" disabled>Selecciona un rol base</option>
+    {roles.filter(item=>item.nombre!=='administrador').map(item=><option key={item.id} value={item.id}>{item.nombre_visible||item.nombre}</option>)}
+   </select></label>
+   <p className="muted">Se copian los permisos del rol base. Luego puedes ajustarlos dentro de su alcance. Administrador no se puede usar como base.</p>
+   <button className="primary" disabled={busy}>Crear rol y ajustar permisos</button>
+  </form>}
+  {['editar','eliminar'].includes(action)&&<>
+   <label>Seleccionar rol<select value={selected} disabled={busy} onChange={event=>{Selected(event.target.value);Notice('')}}>
+    <option value="">Selecciona un rol</option>
+    {roles.map(item=><option key={item.id} value={item.id}>{item.nombre_visible||item.nombre}</option>)}
+   </select></label>
+   {role&&action==='editar'&&<RoleDefinition key={role.id+':'+JSON.stringify(role)} role={role} modules={modules} api={api} run={run} busy={busy} onSaved={saved}/>}
+   {role&&action==='eliminar'&&<form className="role-card" onSubmit={remove}>
+    <h3>Eliminar {role.nombre_visible||role.nombre}</h3>
+    <p className="muted">{role.base_role?'Solo se puede eliminar si ninguna cuenta tiene este rol asignado.':'Este rol pertenece al sistema y no se puede eliminar.'}</p>
+    <button className="primary" disabled={busy||!role.base_role}>Confirmar eliminación</button>
+   </form>}
+  </>}
+ </section>;
 }
 
 function RoleDefinition({role,modules,api,run,busy,onSaved}){
@@ -44,9 +73,9 @@ function RoleDefinition({role,modules,api,run,busy,onSaved}){
   const applyPermissions=event.nativeEvent.submitter?.value==='permisos';
   run(async()=>{
    const data=new FormData(form);
-   const permisos=role.permisos.map(module=>({
-    modulo_id:Number(module.modulo_id),
-    ...Object.fromEntries(permissionFields.map(([field])=>[field,data.has(`permission_${module.modulo_id}_${field}`)]))
+   const permisos=modules.map(module=>({
+    modulo_id:Number(module.id),
+    ...Object.fromEntries(permissionFields.map(([field])=>[field,data.has(`permission_${module.id}_${field}`)]))
    }));
    await api('/admin/roles/'+role.id,'PUT',{
     nombre_visible:String(data.get('nombre_visible')||'').trim(),
@@ -59,6 +88,8 @@ function RoleDefinition({role,modules,api,run,busy,onSaved}){
  };
  return <form className="role-card" onSubmit={save}>
   <h3>{role.nombre_visible||role.nombre}</h3>
+  {role.base_role&&<p className="muted">Los permisos se ajustan dentro del alcance del rol base; no amplían sus facultades.</p>}
+  <fieldset disabled={busy}>
   <label>Nombre visible<input name="nombre_visible" maxLength="80" defaultValue={role.nombre_visible||role.nombre} required/></label>
   <label>Descripción<input name="descripcion" maxLength="160" defaultValue={role.descripcion||''}/></label>
   <div className="role-permissions">
@@ -77,7 +108,6 @@ function RoleDefinition({role,modules,api,run,busy,onSaved}){
   {role.nombre==='administrador'&&<p className="muted">El rol Administrador conserva todos los permisos.</p>}
   <p className="muted">Las filas sin aplicar conservan las reglas actuales del rol. Aplica la matriz solo cuando hayas revisado todos sus módulos.</p>
   <div className="actions"><button disabled={busy} name="action" value="definicion">Guardar nombre y descripción</button><button className="primary" disabled={busy} name="action" value="permisos">Aplicar permisos</button></div>
+  </fieldset>
  </form>;
 }
-
-function Table({heads,rows}){return <div className="table-scroll"><table><thead><tr>{heads.map(head=><th key={head}>{head}</th>)}</tr></thead><tbody>{rows.map((row,index)=><tr key={index}>{row.map((value,column)=><td key={column}>{value}</td>)}</tr>)}</tbody></table>{!rows.length&&<p className="muted">No hay registros para mostrar.</p>}</div>}
